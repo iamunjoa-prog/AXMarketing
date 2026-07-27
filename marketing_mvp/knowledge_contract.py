@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from marketing_mvp.integration_contract import empty_asset
+from marketing_mvp.integration_contract import empty_asset, fit_banner_text
 
 
 SLOT_CONTRACTS: list[dict[str, Any]] = [
@@ -115,26 +115,38 @@ def recommendation_to_assets(
 
     event_name = campaign.get("event_name") or campaign.get("product_name") or ""
     copy = campaign.get("copy") or ""
+    product_name = campaign.get("product_name") or event_name
+    benefit = campaign.get("benefit") or ""
+    if benefit == "혜택 없음":
+        short_copy = "지금 만나보세요"
+    elif "추첨" in benefit:
+        short_copy = "경품 혜택 확인"
+    else:
+        short_copy = benefit or copy
     assets: list[dict[str, Any]] = []
     for banner_type in selected_types:
         asset = empty_asset(banner_type)
         data = asset["data"]
+
+        def set_text(key: str, value: str) -> None:
+            data[key] = fit_banner_text(banner_type, key, value)
+
         if banner_type == "TODAY_BTV":
-            data["mainTitle"] = event_name
-            data["subText"] = copy
+            set_text("mainTitle", event_name)
+            set_text("subText", copy)
         elif banner_type == "GENERAL_BANNER":
             data["colType"] = "2단"
-            data["previewTitle"] = event_name
-            data["previewSub"] = copy
-            data["bannerCopy"] = copy
+            set_text("previewTitle", event_name)
+            set_text("previewSub", copy)
+            set_text("bannerCopy", short_copy)
         elif banner_type == "FULL_PROMO_BANNER":
-            data["mainCopy"] = event_name
-            data["subCopy"] = copy
+            set_text("mainCopy", event_name)
+            set_text("subCopy", copy)
         elif banner_type == "SYNOPSIS_BANNER":
-            data["mainTitle"] = event_name
-            data["subTitle"] = copy
+            set_text("mainTitle", product_name)
+            set_text("subTitle", short_copy)
         elif banner_type == "LONG_BANNER":
-            data["copy"] = copy
-            data["subTitle"] = event_name
+            set_text("copy", event_name)
+            set_text("subTitle", short_copy)
         assets.append(asset)
     return assets

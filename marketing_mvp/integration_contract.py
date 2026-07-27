@@ -4,18 +4,24 @@ from typing import Any
 
 
 ACTION = "CREATE_CAMPAIGN_ASSETS"
+TEXT_SPEC_SOURCE = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1Aq9YiYfnSJ9ycHRiEeEXz59FJnTRKVVOzZBMw09hw5A/edit?gid=0#gid=0"
+)
 
 BANNER_SPECS: dict[str, dict[str, Any]] = {
     "TODAY_BTV": {
         "label": "Today B tv",
         "url": "https://raw.githubusercontent.com/btvcuration/campaign/main/assets/images/ui-templates/today_btv.png",
         "keys": ["topText", "mainTitle", "subText", "imageUrl", "landingValue", "gnb"],
+        "text_limits": {"topText": 9, "mainTitle": 20, "subText": 20},
         "fixed_gnb": ["홈"],
     },
     "MINI_EPG_BANNER": {
         "label": "실시간 EPG 배너",
         "url": "https://raw.githubusercontent.com/btvcuration/campaign/main/assets/images/ui-templates/mini_epg.png",
         "keys": ["imageUrl", "buttonText", "landingValue", "gnb"],
+        "text_limits": {"buttonText": 5},
         "fixed_gnb": ["실시간 채널"],
     },
     "GENERAL_BANNER": {
@@ -25,6 +31,7 @@ BANNER_SPECS: dict[str, dict[str, Any]] = {
             "colType", "previewTitle", "previewSub", "previewImg",
             "bannerCopy", "bannerImg", "landingValue", "gnb",
         ],
+        "text_limits": {"previewTitle": 20, "previewSub": 20, "bannerCopy": 8},
         "enums": {"colType": ["1단", "2단", "3단"]},
     },
     "FULL_PROMO_BANNER": {
@@ -37,6 +44,17 @@ BANNER_SPECS: dict[str, dict[str, Any]] = {
             "card3Title", "card3Sub", "card3Img", "card3Landing",
             "landingValue", "gnb",
         ],
+        "text_limits": {
+            "topLogo": 20,
+            "mainCopy": 40,
+            "subCopy": 68,
+            "card1Title": 10,
+            "card1Sub": 10,
+            "card2Title": 10,
+            "card2Sub": 10,
+            "card3Title": 10,
+            "card3Sub": 10,
+        },
     },
     "BIG_BANNER": {
         "label": "빅배너",
@@ -45,32 +63,56 @@ BANNER_SPECS: dict[str, dict[str, Any]] = {
             "subType", "mainTitle", "subTitle", "desc", "buttonText",
             "imageUrl", "landingValue", "gnb",
         ],
+        "text_limits": {"mainTitle": 19, "subTitle": 19},
         "enums": {"subType": ["기본형", "가입하기형"]},
     },
     "LONG_BANNER": {
         "label": "롱배너",
         "url": "https://raw.githubusercontent.com/btvcuration/campaign/main/assets/images/ui-templates/long_banner.png",
         "keys": ["copy", "subTitle", "imageUrl", "landingValue", "gnb"],
+        "text_limits": {"copy": 17, "subTitle": 12},
     },
     "STRIP_BANNER": {
         "label": "띠배너",
         "url": "https://raw.githubusercontent.com/btvcuration/campaign/main/assets/images/ui-templates/strip_banner.png",
         "keys": ["mainTitle", "subTitle", "imageUrl", "landingValue", "gnb"],
+        "text_limits": {"mainTitle": 25, "subTitle": 25},
     },
     "SYNOPSIS_BANNER": {
         "label": "시놉시스 배너",
         "url": "https://raw.githubusercontent.com/btvcuration/campaign/main/assets/images/ui-templates/synopsis_banner.png",
         "keys": ["mainTitle", "subTitle", "badgeText", "imageUrl", "landingValue", "gnb"],
+        "text_limits": {"mainTitle": 8, "subTitle": 8},
         "fixed_gnb": ["콘텐츠"],
     },
     "PROMO_POPUP": {
         "label": "프로모션 팝업",
         "url": "https://raw.githubusercontent.com/btvcuration/campaign/main/assets/images/ui-templates/promo_popup.png",
         "keys": ["imageUrl", "buttonText", "closeText", "landingValue", "gnb"],
+        "text_limits": {"buttonText": 9, "closeText": 9},
     },
 }
 
 OBSERVED_GNB_VALUES = ["홈", "영화시리즈", "콘텐츠", "실시간 채널"]
+
+
+def text_limit_for(banner_type: str, key: str) -> int | None:
+    spec = BANNER_SPECS.get(banner_type, {})
+    return spec.get("text_limits", {}).get(key)
+
+
+def fit_banner_text(banner_type: str, key: str, value: str) -> str:
+    """Fit generated copy to the approved Google Sheets character limit."""
+    text = " ".join((value or "").split())
+    limit = text_limit_for(banner_type, key)
+    if not limit or len(text) <= limit:
+        return text
+    clipped = text[:limit].rstrip()
+    if " " in clipped:
+        word_safe = clipped.rsplit(" ", 1)[0].rstrip()
+        if len(word_safe) >= max(4, limit // 2):
+            return word_safe
+    return clipped
 
 
 def empty_asset(banner_type: str) -> dict[str, Any]:
@@ -118,6 +160,13 @@ def validate_asset(asset: dict[str, Any]) -> list[str]:
             errors.append(f"{banner_type}.data.gnb는 배열이어야 합니다.")
         elif key != "gnb" and not isinstance(data[key], str):
             errors.append(f"{banner_type}.data.{key}는 문자열이어야 합니다.")
+        else:
+            limit = text_limit_for(banner_type, key)
+            if limit and len(data[key]) > limit:
+                errors.append(
+                    f"{banner_type}.data.{key}는 최대 {limit}자입니다. "
+                    f"현재 {len(data[key])}자"
+                )
     if spec.get("fixed_gnb") and data.get("gnb") != spec["fixed_gnb"]:
         errors.append(f"{banner_type}.data.gnb는 {spec['fixed_gnb']} 고정입니다.")
     for key, values in spec.get("enums", {}).items():
