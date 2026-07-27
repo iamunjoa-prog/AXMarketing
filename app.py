@@ -39,7 +39,9 @@ extract_fields = extractor_module.extract_fields
 extract_reference_urls = extractor_module.extract_reference_urls
 BANNER_SPECS = contract_module.BANNER_SPECS
 OBSERVED_GNB_VALUES = contract_module.OBSERVED_GNB_VALUES
+TEXT_SPEC_SOURCE = contract_module.TEXT_SPEC_SOURCE
 empty_asset = contract_module.empty_asset
+fit_banner_text = contract_module.fit_banner_text
 make_mermaid = contract_module.make_mermaid
 validate_asset = contract_module.validate_asset
 validate_contract = contract_module.validate_contract
@@ -60,7 +62,47 @@ st.markdown(
     """
     <style>
     .block-container {max-width: 1500px; padding-top: 1.5rem;}
-    [data-testid="stChatMessage"] {border: 1px solid #ececf1; border-radius: 14px; padding: .25rem .7rem;}
+    [data-testid="stChatMessage"] {
+        width: fit-content;
+        max-width: 88%;
+        min-width: 0;
+        margin: .4rem 0;
+        padding: .55rem .75rem;
+        border: 0;
+        border-radius: 16px;
+        gap: .55rem;
+        box-shadow: none;
+    }
+    [data-testid="stChatMessage"][aria-label="assistant message"] {
+        background: #f3f5f8;
+        border-top-left-radius: 5px;
+    }
+    [data-testid="stChatMessage"][aria-label="user message"] {
+        margin-left: auto;
+        background: #e7f1ff;
+        border-top-right-radius: 5px;
+        flex-direction: row-reverse;
+    }
+    [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] li {
+        font-size: .84rem;
+        line-height: 1.5;
+    }
+    [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p {
+        margin-bottom: .3rem;
+    }
+    [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p:last-child {
+        margin-bottom: 0;
+    }
+    [data-testid="stChatMessageAvatarUser"],
+    [data-testid="stChatMessageAvatarAssistant"] {
+        width: 1.75rem;
+        height: 1.75rem;
+        flex: 0 0 1.75rem;
+    }
+    [data-testid="stChatInput"] textarea {
+        font-size: .86rem;
+    }
     div[data-testid="stMetric"] {background: #f7f8fb; padding: .8rem; border-radius: 12px;}
     </style>
     """,
@@ -108,7 +150,7 @@ def invalidate_confirmation() -> None:
 st.title("🔷 AX 마케팅 매니저")
 st.caption(f"캠페인 ID · {st.session_state.campaign['campaign_id']}")
 
-chat_col, state_col = st.columns([1.25, 1], gap="large")
+state_col, chat_col = st.columns([1, 1.25], gap="large")
 
 with chat_col:
     st.subheader("AX Manager와 대화로 기획하기")
@@ -120,6 +162,7 @@ with chat_col:
             - ✅ HOME_DISPLAY 핵심 전시 구좌 인사이트 PDF — 로컬 추천 로직에 연결
             - ⏳ 웹 검색·최신 작품 정보 — API 연결 전
             - ✅ B tv JSON·Mermaid 시스템 계약 — 로컬 검증기에 연결
+            - ✅ Google Sheets 배너·텍스트 규격 — 배너별 글자 수 제한에 연결
             """
         )
     with st.expander("지식·시스템 규격 정리표", expanded=False):
@@ -234,7 +277,7 @@ with chat_col:
                         f"영화 카피 적용 방향: {movie_policy['guidance']}\n\n"
                         f"홈 전시 적용 방향: {display_insight['copy_guidance']}\n\n"
                         "미적용: 웹 검색·최신 작품 정보\n\n"
-                        "오른쪽 상태판에서 직접 수정할 수 있습니다."
+                        "왼쪽 상태판에서 직접 수정할 수 있습니다."
                     )
         elif extracted:
             invalidate_confirmation()
@@ -505,6 +548,9 @@ with state_col:
 st.divider()
 st.subheader("Userflow 및 배너 에셋")
 st.caption("배너 type과 data Key는 B tv 시스템 연동 계약에 따라 고정됩니다.")
+st.markdown(
+    f"텍스트 글자 수는 [B tv 배너 규격 Google Sheets]({TEXT_SPEC_SOURCE})를 적용합니다."
+)
 
 existing_by_type = {asset["type"]: asset for asset in st.session_state.campaign.get("assets", [])}
 selected_types = st.multiselect(
@@ -553,9 +599,27 @@ for banner_index, banner_type in enumerate(selected_types):
                     key=widget_key,
                 )
             else:
+                text_limit = spec.get("text_limits", {}).get(key)
+                current_value = asset["data"].get(key, "")
+                if text_limit and len(current_value) > text_limit:
+                    st.warning(
+                        f"{key} 기존 값이 최대 {text_limit}자를 초과해 "
+                        "규격에 맞게 줄여 표시합니다."
+                    )
+                    current_value = fit_banner_text(
+                        banner_type,
+                        key,
+                        current_value,
+                    )
                 asset_data[key] = st.text_input(
-                    key,
-                    value=asset["data"].get(key, ""),
+                    f"{key} · 최대 {text_limit}자" if text_limit else key,
+                    value=current_value,
+                    max_chars=text_limit,
+                    help=(
+                        f"Google Sheets 배너 규격 기준 최대 {text_limit}자"
+                        if text_limit
+                        else None
+                    ),
                     key=widget_key,
                 )
         draft_assets.append({"name": asset_name, "type": banner_type, "data": asset_data})
