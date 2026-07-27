@@ -150,7 +150,7 @@ def invalidate_confirmation() -> None:
 st.title("🔷 AX 마케팅 매니저")
 st.caption(f"캠페인 ID · {st.session_state.campaign['campaign_id']}")
 
-state_col, chat_col = st.columns([1, 1.25], gap="large")
+state_col, chat_col = st.columns([1.2, 0.8], gap="large")
 
 with chat_col:
     st.subheader("AX Manager와 대화로 기획하기")
@@ -189,10 +189,11 @@ with chat_col:
                     f"{issue['issue']}  \n"
                     f"임시 규칙: {issue['temporary_rule']}"
                 )
-    for message in st.session_state.messages:
-        avatar = "assets/ax_manager.svg" if message["role"] == "assistant" else None
-        with st.chat_message(message["role"], avatar=avatar):
-            st.write(message["content"])
+    with st.container(height=480, border=False):
+        for message in st.session_state.messages:
+            avatar = "assets/ax_manager.svg" if message["role"] == "assistant" else None
+            with st.chat_message(message["role"], avatar=avatar):
+                st.write(message["content"])
     prompt = st.chat_input("예: 군체 프로모션을 7/28~8/12 TARGET으로 진행해줘...")
     if prompt:
         st.session_state.messages.append({"role": "user", "content": prompt})
