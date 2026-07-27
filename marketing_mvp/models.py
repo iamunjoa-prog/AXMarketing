@@ -7,6 +7,7 @@ def empty_campaign() -> dict[str, Any]:
     return {
         "campaign_id": "",
         "product_name": "",
+        "product_type": "",
         "product_category": "",
         "work_facts": "",
         "start_date": "",
@@ -37,6 +38,7 @@ def empty_campaign() -> dict[str, Any]:
 
 def validate_basic_info(campaign: dict[str, Any]) -> list[str]:
     labels = {
+        "product_type": "PPV/PPM",
         "product_name": "상품명",
         "start_date": "시작일",
         "end_date": "종료일",
@@ -58,6 +60,7 @@ def validate_basic_info(campaign: dict[str, Any]) -> list[str]:
 
 def validate_planning_info(campaign: dict[str, Any]) -> list[str]:
     labels = {
+        "product_type": "PPV/PPM",
         "product_name": "상품명",
         "audience_type": "MASS/TARGET",
         "benefit": "혜택",

@@ -16,6 +16,49 @@ def recommend_home_display(campaign: dict[str, Any]) -> dict[str, Any]:
     )
     entry = "Today B tv TARGET" if audience == "TARGET" else "Today B tv MASS"
 
+    if campaign.get("product_type") == "PPM":
+        is_btv_plus = (
+            "btv+" in (campaign.get("product_name") or "").lower().replace(" ", "")
+        )
+        source = "B tv 이벤트 유형 + 4.2 방송 월정액"
+        if is_btv_plus:
+            source += " + 4.3 B tv+"
+        if is_complex_reward:
+            areas = [entry, "띠배너", "풀페이지 배너", "가입하기 빅배너"]
+            flow = (
+                f"{entry} 또는 띠배너 → 풀페이지 배너 → "
+                "가입하기 빅배너 → 월정액 가입창"
+            )
+            reason = (
+                "월정액의 할인과 경품 조건을 상세 랜딩에서 먼저 설명하고, "
+                "가입하기 빅배너에서 월정액 가입창으로 연결합니다."
+            )
+            copy_guidance = (
+                "진입 배너에는 가입 혜택을 짧게 쓰고, 경품 조건과 지급 방식은 "
+                "풀페이지에 분리합니다."
+            )
+        else:
+            areas = [entry, "띠배너", "가입하기 빅배너"]
+            flow = f"{entry} 또는 띠배너 → 가입하기 빅배너 → 월정액 가입창"
+            reason = (
+                "월정액 신규가입 할인은 조건이 단순하므로 상세 랜딩 단계를 늘리지 않고 "
+                "가입하기 빅배너와 월정액 가입창으로 바로 연결합니다."
+            )
+            copy_guidance = (
+                "상품명, 신규가입 조건, 첫 달 할인율을 한 번에 이해할 수 있게 구분해 씁니다."
+            )
+        return {
+            "source": source,
+            "areas": areas,
+            "flow": flow,
+            "reason": reason,
+            "copy_guidance": copy_guidance,
+            "caution": (
+                "과거 관찰 수치는 성과 보장이 아니며, 실제 편성 전 구좌 가용성과 "
+                "최신 성과를 확인해야 합니다. 풀페이지 배너는 최초 노출 구좌로 단독 사용하지 않습니다."
+            ),
+        }
+
     if is_complex_reward:
         areas = [entry, "2단 배너", "풀페이지 배너"]
         flow = f"{entry} 또는 2단 배너 → 풀페이지 배너 → 구매 또는 이벤트 참여"

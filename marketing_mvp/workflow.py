@@ -10,6 +10,8 @@ def next_question(campaign: dict[str, Any]) -> str:
         if campaign.get("product_category") == "영화":
             return "영화 작품명을 알려주세요."
         return "어떤 상품의 프로모션인가요?"
+    if not campaign.get("product_type"):
+        return "상품 유형은 단건 콘텐츠 PPV와 월정액 PPM 중 무엇인가요?"
     if not campaign.get("audience_type"):
         return "진행 방식은 MASS와 TARGET 중 무엇인가요? 아직 미정이면 다른 기획부터 진행할 수 있습니다."
     if (
@@ -39,6 +41,35 @@ def is_affirmative_response(text: str) -> bool:
         and any(word in normalized for word in ("다음", "진행", "해줘", "시작", "확정", "적용"))
     )
     return exact_match or contextual_match
+
+
+def is_campaign_reset_request(text: str) -> bool:
+    normalized = text.strip().lower().replace(" ", "")
+    cancel_phrases = (
+        "지금까지한거취소",
+        "지금까지한것취소",
+        "현재기획취소",
+        "기획취소",
+        "전부취소",
+        "처음부터다시",
+        "새로시작",
+    )
+    if any(phrase in normalized for phrase in cancel_phrases):
+        return True
+    starts_another = any(
+        phrase in normalized
+        for phrase in (
+            "다른프로모션",
+            "새프로모션",
+            "새로운프로모션",
+            "다른캠페인",
+            "새캠페인",
+            "새로운캠페인",
+        )
+    )
+    return starts_another and any(
+        word in normalized for word in ("기획", "시작", "진행", "할게", "해줘")
+    )
 
 
 def is_contextual_no_benefit_response(text: str, previous_assistant: str) -> bool:

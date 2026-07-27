@@ -4,6 +4,10 @@ from typing import Any
 
 
 SOURCE_NAME = "4.1. 마케팅 인사이트 (영화 PPV)"
+SOURCE_URL = (
+    "https://docs.google.com/document/d/"
+    "1kK2rlUXbURraANBCQMIfDrMBHZ5X6us9nmvfe6Tly4s/edit"
+)
 
 
 def assess_movie_copy(campaign: dict[str, Any]) -> dict[str, Any]:

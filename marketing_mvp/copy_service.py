@@ -16,6 +16,20 @@ def generate_copy(campaign: dict[str, Any]) -> dict[str, str]:
     product = campaign.get("product_name") or "이 상품"
     benefit = campaign.get("benefit") or "특별 혜택"
     work_facts = (campaign.get("work_facts") or "").strip()
+    product_type = campaign.get("product_type") or ""
+    if product_type == "PPM" and benefit != "혜택 없음":
+        normalized_benefit = re.sub(
+            r"신규\s*가입\s*시", "신규 가입 시", benefit
+        )
+        normalized_benefit = re.sub(r"첫\s*달", "첫 달", normalized_benefit)
+        copy = f"{product} {normalized_benefit}".strip().rstrip("!！") + "!"
+        event_name = (
+            f"{product} 신규가입 혜택"
+            if "신규" in benefit or "첫" in benefit
+            else f"{product} 월정액 혜택"
+        )
+        return {"event_name": event_name, "copy": copy}
+
     if benefit == "혜택 없음" and work_facts:
         verified_hook = re.split(r"[.!?。\\n]", work_facts, maxsplit=1)[0].strip()
         verified_hook = verified_hook[:60].rstrip()

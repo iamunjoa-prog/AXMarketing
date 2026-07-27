@@ -60,9 +60,30 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         result["benefit"] = text[purchase_match.start():].strip().rstrip(".。")
         result["benefit_pending"] = False
 
+    is_subscription_discount = (
+        re.search(r"(?:신규\s*가입|가입\s*시|첫\s*달|\d+\s*개월)", text)
+        and re.search(r"(?:\d+\s*%|[\d,]+\s*원|무료)", text)
+        and re.search(r"(?:할인|무료)", text)
+    )
+    if is_subscription_discount and not result.get("benefit"):
+        result["benefit"] = text.strip().rstrip(".。")
+        result["benefit_pending"] = False
+
     audience = re.search(r"(?<![A-Za-z])(MASS|TARGET)(?![A-Za-z])", text, re.IGNORECASE)
     if audience:
         result["audience_type"] = audience.group(1).upper()
+
+    is_ppm = (
+        re.search(r"(?<![A-Za-z])PPM(?![A-Za-z])", text, re.IGNORECASE)
+        or "월정액" in text
+        or re.search(r"(?<![A-Za-z])B\s*tv\s*\+", text, re.IGNORECASE)
+    )
+    is_ppv = re.search(r"(?<![A-Za-z])PPV(?![A-Za-z])", text, re.IGNORECASE)
+    if is_ppm:
+        result["product_type"] = "PPM"
+        result["product_category"] = "월정액"
+    elif is_ppv:
+        result["product_type"] = "PPV"
 
     capa = re.search(r"(?:목표\s*)?(?:capa|모수)\s*(?:는|은|:)?\s*([\d,.]+\s*(?:만|천)?)", text, re.IGNORECASE)
     if capa:
@@ -127,13 +148,16 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
             value = movie_title.group(1).strip()
             if value:
                 result["product_name"] = value
+                result["product_type"] = "PPV"
                 result["product_category"] = "영화"
                 break
 
     if re.fullmatch(r"\s*영화\s*", text):
         result["product_category"] = "영화"
+        result["product_type"] = "PPV"
 
     product_patterns = [
+        r"([^\n,，]{1,40}?)\s*(?:프로모션|이벤트)",
         r"([가-힣A-Za-z0-9][가-힣A-Za-z0-9 _-]{0,30}?)\s*(?:프로모션|이벤트)",
         r"(?:상품명?|콘텐츠명?)\s*(?:은|는|:)?\s*([가-힣A-Za-z0-9 _-]+)",
     ]
@@ -143,6 +167,8 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
             if product:
                 value = product.group(1).strip()
                 value = re.sub(r"^(?:이번|신규)\s+", "", value)
+                if value in {"다른", "새", "새로운", "신규"}:
+                    continue
                 result["product_name"] = value
                 break
     if result.get("benefit"):

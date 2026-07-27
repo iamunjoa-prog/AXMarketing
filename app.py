@@ -14,6 +14,7 @@ from marketing_mvp import extractor as extractor_module
 from marketing_mvp import integration_contract as contract_module
 from marketing_mvp import home_display_insights as home_display_insights_module
 from marketing_mvp import movie_ppv_insights as movie_ppv_insights_module
+from marketing_mvp import ppm_insights as ppm_insights_module
 from marketing_mvp import knowledge_contract as knowledge_contract_module
 from marketing_mvp import models as models_module
 from marketing_mvp import workflow as workflow_module
@@ -26,12 +27,14 @@ extractor_module = importlib.reload(extractor_module)
 contract_module = importlib.reload(contract_module)
 home_display_insights_module = importlib.reload(home_display_insights_module)
 movie_ppv_insights_module = importlib.reload(movie_ppv_insights_module)
+ppm_insights_module = importlib.reload(ppm_insights_module)
 knowledge_contract_module = importlib.reload(knowledge_contract_module)
 models_module = importlib.reload(models_module)
 workflow_module = importlib.reload(workflow_module)
 generate_copy = copy_service_module.generate_copy
 recommend_home_display = home_display_insights_module.recommend_home_display
 assess_movie_copy = movie_ppv_insights_module.assess_movie_copy
+assess_ppm_campaign = ppm_insights_module.assess_ppm_campaign
 SLOT_CONTRACTS = knowledge_contract_module.SLOT_CONTRACTS
 recommendation_to_assets = knowledge_contract_module.recommendation_to_assets
 unresolved_issues = knowledge_contract_module.unresolved_issues
@@ -54,6 +57,7 @@ is_benefit_recommendation_request = workflow_module.is_benefit_recommendation_re
 is_copy_generation_request = workflow_module.is_copy_generation_request
 is_display_plan_request = workflow_module.is_display_plan_request
 is_affirmative_response = workflow_module.is_affirmative_response
+is_campaign_reset_request = workflow_module.is_campaign_reset_request
 is_contextual_no_benefit_response = workflow_module.is_contextual_no_benefit_response
 next_question = workflow_module.next_question
 to_admin_payload = workflow_module.to_admin_payload
@@ -138,6 +142,9 @@ if "campaign" not in st.session_state:
     campaign = empty_campaign()
     campaign["campaign_id"] = f"CMP-{uuid.uuid4().hex[:8].upper()}"
     st.session_state.campaign = campaign
+for key, default_value in empty_campaign().items():
+    st.session_state.campaign.setdefault(key, default_value)
+
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {
@@ -163,6 +170,16 @@ if (
 
 def save() -> None:
     repo.save(st.session_state.campaign)
+
+
+def reset_campaign_state() -> None:
+    campaign = empty_campaign()
+    campaign["campaign_id"] = f"CMP-{uuid.uuid4().hex[:8].upper()}"
+    st.session_state.campaign = campaign
+    st.session_state.pending_display_recommendation = None
+    st.session_state.admin_payload = None
+    st.session_state.capa_result = None
+    st.session_state["selected_banner_types"] = []
 
 
 def invalidate_confirmation() -> None:
@@ -260,6 +277,16 @@ with chat_col:
                 st.write(message["content"])
     prompt = st.chat_input("예: 군체 프로모션을 7/28~8/12 TARGET으로 진행해줘...")
     if prompt:
+        if is_campaign_reset_request(prompt):
+            reset_campaign_state()
+            st.session_state.messages = [
+                {
+                    "role": "assistant",
+                    "content": "이전 기획을 취소하고 새 프로모션 기획을 시작할게요. 진행할 상품을 알려주세요.",
+                }
+            ]
+            save()
+            st.rerun()
         st.session_state.messages.append({"role": "user", "content": prompt})
         previous_assistant = next(
             (
@@ -348,6 +375,7 @@ with chat_col:
             st.session_state.campaign.update(extracted)
             labels = {
                 "product_name": "상품명", "product_category": "상품 유형",
+                "product_type": "PPV/PPM",
                 "start_date": "시작일", "end_date": "종료일",
                 "audience_type": "방식", "benefit": "혜택", "target_capa": "목표 Capa",
                 "schedule_pending": "일정 미정 상태",
@@ -441,6 +469,7 @@ with chat_col:
             """
             - ✅ 캠페인 상태판의 확정 정보
             - ✅ 영화 PPV 마케팅 인사이트 PDF — 카피 안전 기준에 연결
+            - ✅ 방송 월정액 PPM·B tv+ 인사이트 — 상품 분류·전시·카피 기준에 연결
             - ✅ HOME_DISPLAY 핵심 전시 구좌 인사이트 PDF — 로컬 추천 로직에 연결
             - ⏳ 웹 검색·최신 작품 정보 — API 연결 전
             - ✅ B tv JSON·Mermaid 시스템 계약 — 로컬 검증기에 연결
@@ -476,6 +505,18 @@ with state_col:
     st.subheader("현재 캠페인")
     c = st.session_state.campaign
     product = st.text_input("상품명", value=c["product_name"])
+    product_type = st.selectbox(
+        "상품 유형", ["", "PPV", "PPM"],
+        index=["", "PPV", "PPM"].index(c.get("product_type", ""))
+        if c.get("product_type", "") in ("", "PPV", "PPM") else 0,
+        help="대화에서 자동 분류되며, 필요한 경우 여기서 바로잡을 수 있습니다.",
+    )
+    if product_type == "PPM":
+        product_category = "월정액"
+    elif product_type == "PPV":
+        product_category = "영화" if c.get("product_category") == "영화" else ""
+    else:
+        product_category = ""
     work_facts = st.text_area(
         "작품 공식 정보·줄거리",
         value=c.get("work_facts", ""),
@@ -562,6 +603,8 @@ with state_col:
     )
     edited = {
         "product_name": product,
+        "product_type": product_type,
+        "product_category": product_category,
         "work_facts": work_facts,
         "start_date": "" if schedule_pending else (start.isoformat() if start else ""),
         "end_date": "" if schedule_pending else (end.isoformat() if end else ""),
@@ -591,6 +634,7 @@ with state_col:
     def apply_edited_campaign() -> None:
         planning_sensitive_keys = (
             "product_name", "work_facts", "start_date", "end_date",
+            "product_type", "product_category",
             "audience_type", "benefit", "target_capa",
         )
         planning_sensitive = any(
@@ -798,10 +842,34 @@ if movie_copy_policy["applies"]:
 
             **적용 방향:** {movie_copy_policy['guidance']}
 
-            **출처:** {movie_copy_policy['source']}
+            **출처:** [{movie_copy_policy['source']}]({movie_ppv_insights_module.SOURCE_URL})
             """
         )
 
+ppm_policy = assess_ppm_campaign(st.session_state.campaign)
+if ppm_policy["applies"]:
+    with st.expander("PPM 월정액 지식 적용 상태", expanded=False):
+        source_lines = "\n".join(
+            f"- [{name}]({url})" for name, url in ppm_policy["sources"]
+        )
+        recommendation = ppm_policy["recommendation"] or "현재 확정 정보 범위에서 별도 일정·타겟 조정 제안은 없습니다."
+        operations_name, operations_url = ppm_policy["operations_source"]
+        st.markdown(
+            f"""
+            **적용 트랙:** {ppm_policy['track']}
+
+            **카피·기획 방향:** {ppm_policy['guidance']}
+
+            **조건별 제안:** {recommendation}
+
+            **출처:**
+            {source_lines}
+
+            **운영 데이터:** [{operations_name}]({operations_url}) — 실시간 API 조회 전
+
+            **주의:** {ppm_policy['caution']}
+            """
+        )
 st.subheader("다음 단계")
 current_campaign = st.session_state.campaign
 
