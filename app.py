@@ -504,103 +504,178 @@ with chat_col:
 with state_col:
     st.subheader("현재 캠페인")
     c = st.session_state.campaign
-    product = st.text_input("상품명", value=c["product_name"])
-    product_type = st.selectbox(
-        "상품 유형", ["", "PPV", "PPM"],
-        index=["", "PPV", "PPM"].index(c.get("product_type", ""))
-        if c.get("product_type", "") in ("", "PPV", "PPM") else 0,
-        help="대화에서 자동 분류되며, 필요한 경우 여기서 바로잡을 수 있습니다.",
+
+    st.caption("상품 정보")
+    product_col, product_type_col, product_detail_col = st.columns([2.1, 0.9, 1.1])
+    with product_type_col:
+        product_type = st.selectbox(
+            "상품 유형",
+            ["", "PPV", "PPM"],
+            index=["", "PPV", "PPM"].index(c.get("product_type", ""))
+            if c.get("product_type", "") in ("", "PPV", "PPM") else 0,
+            format_func=lambda value: {
+                "": "선택",
+                "PPV": "PPV · 단건",
+                "PPM": "PPM · 월정액",
+            }[value],
+            help="대화에서 자동 분류되며 필요한 경우 바로잡을 수 있습니다.",
+        )
+    product_label = (
+        "콘텐츠명" if product_type == "PPV"
+        else "월정액 상품명" if product_type == "PPM"
+        else "상품명"
     )
-    if product_type == "PPM":
-        product_category = "월정액"
-    elif product_type == "PPV":
-        product_category = "영화" if c.get("product_category") == "영화" else ""
-    else:
-        product_category = ""
-    work_facts = st.text_area(
-        "작품 공식 정보·줄거리",
-        value=c.get("work_facts", ""),
-        height=90,
-        placeholder="공식 줄거리, 인물 관계, 관전 포인트 등 확인된 정보만 입력",
-        help="영화 PPV 카피 작성 시 제목만 보고 작품 내용을 추측하지 않기 위해 사용합니다.",
-    )
-    schedule_pending = st.checkbox(
-        "일정 미정",
-        value=c.get("schedule_pending", False),
-        help="미정 상태에서도 상품·타겟·배너 기획을 먼저 진행할 수 있습니다.",
-    )
-    date_a, date_b = st.columns(2)
-    with date_a:
+    with product_col:
+        product = st.text_input(product_label, value=c["product_name"])
+    with product_detail_col:
+        if product_type == "PPV":
+            genre_options = ["", "영화", "TV 방송", "애니메이션", "키즈", "기타"]
+            current_genre = c.get("product_category", "")
+            product_category = st.selectbox(
+                "장르",
+                genre_options,
+                index=genre_options.index(current_genre)
+                if current_genre in genre_options else 0,
+                format_func=lambda value: value or "선택",
+            )
+        elif product_type == "PPM":
+            ppm_options = ["월정액", "B tv+", "방송 월정액", "기타"]
+            current_category = c.get("product_category", "월정액")
+            normalized_product = product.lower().replace(" ", "")
+            if "btv+" in normalized_product and current_category == "월정액":
+                current_category = "B tv+"
+            elif (
+                any(name in product for name in ("CJ ENM", "JTBC", "지상파", "TV조선", "채널A", "MBN"))
+                and current_category == "월정액"
+            ):
+                current_category = "방송 월정액"
+            product_category = st.selectbox(
+                "상품 구분",
+                ppm_options,
+                index=ppm_options.index(current_category)
+                if current_category in ppm_options else 0,
+            )
+        else:
+            st.text_input("유형 상세", value="상품 유형 선택 후 표시", disabled=True)
+            product_category = ""
+
+    st.caption("일정 및 대상")
+    start_col, end_col, pending_col = st.columns([1, 1, 0.72])
+    with pending_col:
+        schedule_pending = st.checkbox(
+            "일정 미정",
+            value=c.get("schedule_pending", False),
+            help="미정 상태에서도 상품·타겟·배너 기획을 먼저 진행할 수 있습니다.",
+        )
+    with start_col:
         start = st.date_input(
             "시작일",
             value=date.fromisoformat(c["start_date"]) if c["start_date"] else None,
             disabled=schedule_pending,
         )
-    with date_b:
+    with end_col:
         end = st.date_input(
             "종료일",
             value=date.fromisoformat(c["end_date"]) if c["end_date"] else None,
             disabled=schedule_pending,
         )
-    schedule_note = st.text_input(
-        "일정 메모",
-        value=c.get("schedule_note", ""),
-        placeholder="예: 성과 기대치에 따라 1주 운영으로 단축 검토",
+
+    audience_col, capa_col, benefit_col, benefit_pending_col = st.columns(
+        [0.85, 1.05, 2.15, 0.78]
     )
-    audience = st.selectbox(
-        "진행 방식", ["", "MASS", "TARGET"],
-        index=["", "MASS", "TARGET"].index(c["audience_type"]) if c["audience_type"] in ("MASS", "TARGET") else 0,
-    )
-    benefit_pending = st.checkbox(
-        "혜택·리워드 미정",
-        value=c.get("benefit_pending", False),
-        help="미정 상태에서는 카피와 배너 구조를 먼저 기획할 수 있습니다.",
-    )
-    benefit = st.text_input(
-        "혜택",
-        value=c["benefit"],
-        disabled=benefit_pending,
-    )
-    target_capa = st.number_input(
-        "목표 Capa", min_value=0, step=10_000,
-        value=int(c["target_capa"] or 0), disabled=audience != "TARGET",
-    )
+    with audience_col:
+        audience = st.selectbox(
+            "진행 방식",
+            ["", "MASS", "TARGET"],
+            index=["", "MASS", "TARGET"].index(c["audience_type"])
+            if c["audience_type"] in ("MASS", "TARGET") else 0,
+            format_func=lambda value: value or "선택",
+        )
+    with capa_col:
+        target_capa = st.number_input(
+            "목표 Capa",
+            min_value=0,
+            step=10_000,
+            value=int(c["target_capa"] or 0),
+            disabled=audience != "TARGET",
+        )
+    with benefit_pending_col:
+        benefit_pending = st.checkbox(
+            "혜택 미정",
+            value=c.get("benefit_pending", False),
+            help="미정이어도 전시 구조를 먼저 기획할 수 있습니다.",
+        )
+    with benefit_col:
+        benefit = st.text_input(
+            "혜택",
+            value=c["benefit"],
+            disabled=benefit_pending,
+            placeholder="예: 신규 가입 시 첫 달 50% 할인",
+        )
+
     copy_ready = bool(c.get("assets"))
-    event_name = st.text_input(
-        "이벤트명",
-        value=c["event_name"],
-        disabled=not copy_ready,
-        placeholder="전시안 확정 후 자동 생성",
-    )
-    copy_text = st.text_area(
-        "이벤트 카피",
-        value=c.get("copy", ""),
-        height=90,
-        disabled=not copy_ready,
-        placeholder="추천 배너 확정 후 영역별 규격에 맞춰 자동 생성",
-    )
-    reference_urls_text = st.text_area(
-        "참고 URL",
-        value="\n".join(c.get("reference_urls", [])),
-        height=80,
-        placeholder="공식 페이지·예고편·기사 URL을 한 줄에 하나씩 입력",
-    )
-    target_condition = st.text_input(
-        "타겟 조건",
-        value=c.get("target_condition", "") if audience == "TARGET" else "",
-        disabled=audience != "TARGET",
-        help="MASS 캠페인은 타겟 조건을 입력하지 않습니다.",
-    )
-    assignee = st.text_input("Jira 담당자", value=c.get("assignee", ""))
-    has_coupon = st.selectbox(
-        "쿠폰 여부", ["N", "Y"],
-        index=1 if c.get("has_coupon") == "Y" else 0,
-    )
-    coupon_benefit = st.text_input(
-        "쿠폰 혜택",
-        value=c.get("coupon_benefit", ""),
-        disabled=has_coupon != "Y",
-    )
+    if copy_ready:
+        st.caption("확정 카피")
+        event_col, copy_col = st.columns([1, 2])
+        with event_col:
+            event_name = st.text_input("이벤트명", value=c["event_name"])
+        with copy_col:
+            copy_text = st.text_area(
+                "이벤트 카피",
+                value=c.get("copy", ""),
+                height=76,
+            )
+    else:
+        event_name = c.get("event_name", "")
+        copy_text = c.get("copy", "")
+        st.caption("전시안을 확정하면 이벤트명과 영역별 카피가 자동으로 채워집니다.")
+
+    with st.expander("추가 설정 · 필요할 때만 입력", expanded=False):
+        facts_label = "작품 공식 정보·줄거리" if product_type == "PPV" else "상품 참고 정보"
+        work_facts = st.text_area(
+            facts_label,
+            value=c.get("work_facts", ""),
+            height=78,
+            placeholder="확인된 공식 정보와 카피 근거만 입력",
+            help="입력된 공식 정보만 카피 근거로 사용합니다.",
+        )
+        note_col, reference_col = st.columns(2)
+        with note_col:
+            schedule_note = st.text_input(
+                "일정 메모",
+                value=c.get("schedule_note", ""),
+                placeholder="예: 성과에 따라 기간 단축 검토",
+            )
+        with reference_col:
+            reference_urls_text = st.text_area(
+                "참고 URL",
+                value="\n".join(c.get("reference_urls", [])),
+                height=70,
+                placeholder="공식 페이지·예고편·기사 URL",
+            )
+        target_col, assignee_col = st.columns([2, 1])
+        with target_col:
+            target_condition = st.text_input(
+                "타겟 조건",
+                value=c.get("target_condition", "") if audience == "TARGET" else "",
+                disabled=audience != "TARGET",
+            )
+        with assignee_col:
+            assignee = st.text_input("Jira 담당자", value=c.get("assignee", ""))
+        coupon_col, coupon_benefit_col = st.columns([0.8, 2.2])
+        with coupon_col:
+            has_coupon = st.selectbox(
+                "쿠폰 여부",
+                ["N", "Y"],
+                index=1 if c.get("has_coupon") == "Y" else 0,
+            )
+        with coupon_benefit_col:
+            coupon_benefit = st.text_input(
+                "쿠폰 혜택",
+                value=c.get("coupon_benefit", ""),
+                disabled=has_coupon != "Y",
+            )
+
     edited = {
         "product_name": product,
         "product_type": product_type,
