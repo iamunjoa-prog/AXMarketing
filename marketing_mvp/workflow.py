@@ -21,11 +21,11 @@ def next_question(campaign: dict[str, Any]) -> str:
         return "혜택이 정해졌나요? 미정이면 ‘리워드 미정’이라고 말씀해 주세요."
     if campaign.get("audience_type") == "TARGET" and not campaign.get("target_capa"):
         return "목표 Capa는 몇 명인가요?"
-    if not campaign.get("event_name") or not campaign.get("copy"):
-        return "다음으로 이벤트명과 카피를 생성할까요?"
     if not campaign.get("exposure_areas"):
-        return "다음으로 홈 전시 구좌와 배너 영역을 추천해드릴까요?"
-    return "기본 기획 정보가 준비되었습니다. 오른쪽 상태판을 검토한 뒤 기본정보를 확정해 주세요."
+        return "다음으로 전시 영역과 추천 배너를 제안해드릴까요?"
+    if not campaign.get("event_name") or not campaign.get("copy"):
+        return "확정된 전시 영역에 맞춰 배너별 카피를 생성할까요?"
+    return "기본 기획 정보가 준비되었습니다. 왼쪽 상태판을 검토해 주세요."
 
 
 def is_affirmative_response(text: str) -> bool:
@@ -36,7 +36,7 @@ def is_affirmative_response(text: str) -> bool:
     }
     contextual_match = (
         normalized.startswith(("응", "웅", "네", "넵", "예", "좋아", "그래"))
-        and any(word in normalized for word in ("다음", "진행", "해줘", "시작"))
+        and any(word in normalized for word in ("다음", "진행", "해줘", "시작", "확정", "적용"))
     )
     return exact_match or contextual_match
 
@@ -86,6 +86,19 @@ def is_copy_generation_request(text: str) -> bool:
         for word in ("만들", "생성", "써줘", "작성", "추천", "제안", "정하")
     )
     return has_copy_word and has_action_word
+
+
+def is_display_plan_request(text: str) -> bool:
+    lowered = text.lower().replace(" ", "")
+    has_display_word = any(
+        word in lowered
+        for word in ("전시", "배너", "구좌", "기획안")
+    )
+    has_action_word = any(
+        word in lowered
+        for word in ("추천", "제안", "만들", "구성", "정해", "진행")
+    )
+    return has_display_word and has_action_word
 
 
 def to_admin_payload(campaign: dict[str, Any]) -> dict[str, Any]:

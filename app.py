@@ -47,10 +47,12 @@ validate_asset = contract_module.validate_asset
 validate_contract = contract_module.validate_contract
 empty_campaign = models_module.empty_campaign
 validate_basic_info = models_module.validate_basic_info
+validate_planning_info = models_module.validate_planning_info
 validate_for_confirmation = models_module.validate_for_confirmation
 benefit_recommendation = workflow_module.benefit_recommendation
 is_benefit_recommendation_request = workflow_module.is_benefit_recommendation_request
 is_copy_generation_request = workflow_module.is_copy_generation_request
+is_display_plan_request = workflow_module.is_display_plan_request
 is_affirmative_response = workflow_module.is_affirmative_response
 is_contextual_no_benefit_response = workflow_module.is_contextual_no_benefit_response
 next_question = workflow_module.next_question
@@ -67,7 +69,7 @@ st.markdown(
         max-width: 88%;
         min-width: 0;
         margin: .4rem 0;
-        padding: .55rem .75rem;
+        padding: .48rem .7rem;
         border: 0;
         border-radius: 16px;
         gap: .55rem;
@@ -79,17 +81,17 @@ st.markdown(
     }
     [data-testid="stChatMessage"][aria-label="user message"] {
         margin-left: auto;
-        background: #e7f1ff;
+        background: #6d28d9;
         border-top-right-radius: 5px;
         flex-direction: row-reverse;
     }
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p,
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] li {
         font-size: .84rem;
-        line-height: 1.5;
+        line-height: 1.35;
     }
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p {
-        margin-bottom: .3rem;
+        margin-bottom: .15rem;
     }
     [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p:last-child {
         margin-bottom: 0;
@@ -103,6 +105,26 @@ st.markdown(
     [data-testid="stChatInput"] textarea {
         font-size: .86rem;
     }
+    [data-testid="stChatMessage"][aria-label="user message"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stChatMessage"][aria-label="user message"] [data-testid="stMarkdownContainer"] li {
+        color: #ffffff;
+    }
+    [data-testid="stColumn"]:has([data-testid="stChatInput"]) {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 20px;
+        padding: 1rem 1rem .8rem;
+        box-shadow: 0 12px 32px rgba(15, 23, 42, .10);
+    }
+    [data-testid="stChatInput"] {
+        border: 1px solid #8b5cf6;
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    [data-testid="stChatInputSubmitButton"] {
+        color: #6d28d9;
+    }
+    .stApp {background: #f4f5f7;}
     div[data-testid="stMetric"] {background: #f7f8fb; padding: .8rem; border-radius: 12px;}
     </style>
     """,
@@ -127,6 +149,8 @@ if "admin_payload" not in st.session_state:
     st.session_state.admin_payload = None
 if "capa_result" not in st.session_state:
     st.session_state.capa_result = None
+if "pending_display_recommendation" not in st.session_state:
+    st.session_state.pending_display_recommendation = None
 
 # Older saved drafts could have been marked as basic-confirmed before event
 # copy became a required field. Reopen those campaigns as drafts.
@@ -147,49 +171,89 @@ def invalidate_confirmation() -> None:
         st.session_state.admin_payload = None
 
 
+BANNER_FIELD_LABELS = {
+    "topText": "로고",
+    "mainTitle": "메인 문구",
+    "subText": "서브 문구",
+    "previewTitle": "프리뷰 제목",
+    "previewSub": "프리뷰 문구",
+    "bannerCopy": "배너 문구",
+    "mainCopy": "메인 문구",
+    "subCopy": "서브 문구",
+    "copy": "상단 문구",
+    "subTitle": "하단 문구",
+}
+
+
+def format_display_proposal(recommendation: dict[str, object]) -> str:
+    areas = recommendation.get("areas", [])
+    area_lines = "\n".join(
+        f"{index}. {area}"
+        for index, area in enumerate(areas, start=1)
+    )
+    return (
+        "전시 영역과 추천 배너를 제안했습니다.\n\n"
+        f"**추천 전시 영역**\n{area_lines}\n\n"
+        f"**권장 흐름**\n{recommendation.get('flow', '')}\n\n"
+        f"**추천 이유**\n{recommendation.get('reason', '')}\n\n"
+        "이 전시안으로 확정하면 각 영역 규격에 맞는 카피를 만들고 "
+        "배너 필드와 Userflow를 자동으로 채웁니다."
+    )
+
+
+def format_banner_copy_result(assets: list[dict[str, object]]) -> str:
+    sections = ["전시안을 확정하고 영역별 카피를 자동 적용했습니다."]
+    for asset in assets:
+        banner_type = str(asset["type"])
+        spec = BANNER_SPECS[banner_type]
+        lines = [f"**{spec['label']}**"]
+        data = asset["data"]
+        for key, limit in spec.get("text_limits", {}).items():
+            value = data.get(key, "")
+            if value:
+                label = BANNER_FIELD_LABELS.get(key, key)
+                lines.append(f"- {label}: {value} ({len(value)}/{limit}자)")
+        if len(lines) > 1:
+            sections.append("\n".join(lines))
+    sections.append("왼쪽 기획안에 카피와 Userflow가 채워졌습니다.")
+    return "\n\n".join(sections)
+
+
+def confirm_display_plan() -> tuple[bool, str]:
+    recommendation = st.session_state.pending_display_recommendation
+    if not recommendation:
+        return False, "먼저 전시 영역과 추천 배너를 제안받아 주세요."
+    campaign = st.session_state.campaign
+    movie_policy = assess_movie_copy(campaign)
+    if not movie_policy["ready"]:
+        return False, movie_policy["message"]
+    generated = generate_copy(campaign)
+    campaign.update(generated)
+    campaign["exposure_areas"] = recommendation["areas"]
+    assets = recommendation_to_assets(recommendation["areas"], campaign)
+    campaign["assets"] = assets
+    campaign["mermaid_code"] = make_mermaid(assets)
+    campaign["userflow_confirmed"] = True
+    campaign["review_passed"] = False
+    campaign["status"] = "BASIC_CONFIRMED"
+    st.session_state["selected_banner_types"] = [
+        asset["type"] for asset in assets
+    ]
+    st.session_state.pending_display_recommendation = None
+    st.session_state.admin_payload = None
+    save()
+    return True, format_banner_copy_result(assets)
+
+
 st.title("🔷 AX 마케팅 매니저")
 st.caption(f"캠페인 ID · {st.session_state.campaign['campaign_id']}")
 
 state_col, chat_col = st.columns([1.2, 0.8], gap="large")
 
 with chat_col:
-    st.subheader("AX Manager와 대화로 기획하기")
-    with st.expander("현재 AI 지식 연결 상태", expanded=False):
-        st.markdown(
-            """
-            - ✅ 캠페인 상태판의 확정 정보
-            - ✅ 영화 PPV 마케팅 인사이트 PDF — 카피 안전 기준에 연결
-            - ✅ HOME_DISPLAY 핵심 전시 구좌 인사이트 PDF — 로컬 추천 로직에 연결
-            - ⏳ 웹 검색·최신 작품 정보 — API 연결 전
-            - ✅ B tv JSON·Mermaid 시스템 계약 — 로컬 검증기에 연결
-            - ✅ Google Sheets 배너·텍스트 규격 — 배너별 글자 수 제한에 연결
-            """
-        )
-    with st.expander("지식·시스템 규격 정리표", expanded=False):
-        st.dataframe(
-            SLOT_CONTRACTS,
-            column_config={
-                "knowledge_name": "지식문서 구좌명",
-                "json_type": "JSON type",
-                "settings": "고정 적용 규칙",
-                "owner": "판단 근거",
-                "status": "상태",
-            },
-            hide_index=True,
-            width="stretch",
-        )
-        issues = unresolved_issues()
-        if issues:
-            st.warning(
-                "확인 필요 항목은 시스템 계약 담당자 확인 전 자동 출력하지 않습니다."
-            )
-            for issue in issues:
-                st.markdown(
-                    f"**{issue['id']} · {issue['topic']}**  \n"
-                    f"{issue['issue']}  \n"
-                    f"임시 규칙: {issue['temporary_rule']}"
-                )
-    with st.container(height=480, border=False):
+    st.markdown("#### 🔷 AX Manager")
+    st.caption("캠페인 기획 대화")
+    with st.container(height=520, border=False):
         for message in st.session_state.messages:
             avatar = "assets/ax_manager.svg" if message["role"] == "assistant" else None
             with st.chat_message(message["role"], avatar=avatar):
@@ -213,19 +277,18 @@ with chat_col:
             )
         benefit_recommendation_requested = is_benefit_recommendation_request(prompt)
         affirmative_requested = is_affirmative_response(prompt)
-        accepted_copy_step = affirmative_requested and (
-            "기획을 시작할 수 있습니다" in previous_assistant
+        display_plan_confirmation_requested = (
+            affirmative_requested
+            and st.session_state.pending_display_recommendation is not None
+        )
+        copy_generation_requested = is_copy_generation_request(prompt)
+        display_recommendation_requested = (
+            is_display_plan_request(prompt)
             or (
-                ("카피" in previous_assistant or "이벤트명" in previous_assistant)
-                and "할까요" in previous_assistant
+                affirmative_requested
+                and ("전시 영역" in previous_assistant or "추천 배너" in previous_assistant)
+                and ("제안" in previous_assistant or "할까요" in previous_assistant)
             )
-        )
-        copy_generation_requested = (
-            is_copy_generation_request(prompt) or accepted_copy_step
-        )
-        display_recommendation_requested = affirmative_requested and (
-            ("홈 전시" in previous_assistant or "배너 영역" in previous_assistant)
-            and ("추천" in previous_assistant or "할까요" in previous_assistant)
         )
         extracted = extract_fields(prompt)
         if is_contextual_no_benefit_response(prompt, previous_assistant):
@@ -237,49 +300,44 @@ with chat_col:
             # itself for a confirmed benefit.
             extracted.pop("benefit", None)
             extracted.pop("benefit_pending", None)
-        if copy_generation_requested:
+        if display_plan_confirmation_requested:
             campaign = st.session_state.campaign
             if extracted:
                 invalidate_confirmation()
                 campaign.update(extracted)
-            if reference_urls:
+            missing = validate_planning_info(campaign)
+            if missing:
+                reply = "전시안 확정 전 필요한 항목: " + ", ".join(missing)
+            else:
+                _, reply = confirm_display_plan()
+        elif display_recommendation_requested:
+            campaign = st.session_state.campaign
+            if extracted:
+                invalidate_confirmation()
+                campaign.update(extracted)
+            missing = validate_planning_info(campaign)
+            if missing:
+                reply = "전시 영역 추천 전 필요한 항목: " + ", ".join(missing)
+            else:
+                recommendation = recommend_home_display(campaign)
+                st.session_state.pending_display_recommendation = recommendation
+                reply = format_display_proposal(recommendation)
+        elif copy_generation_requested:
+            if st.session_state.pending_display_recommendation:
                 reply = (
-                    "참고 URL을 상태판에 저장했습니다. "
-                    "현재 테스트 버전에는 웹 검색·LLM API가 연결되지 않아 "
-                    "URL 본문을 읽은 카피는 아직 생성할 수 없습니다. "
-                    "URL을 제외한 확정 정보만으로 시험하려면 "
-                    "‘확정 정보로 카피 만들어줘’라고 말씀해 주세요."
+                    "먼저 제안된 전시 영역과 추천 배너를 확정해 주세요. "
+                    "확정하면 각 영역 규격에 맞는 카피를 자동 생성합니다."
                 )
-            elif not campaign.get("product_name"):
-                reply = "카피를 만들기 전에 상품명을 알려주세요."
-            elif campaign.get("benefit_pending") or not campaign.get("benefit"):
+            elif not st.session_state.campaign.get("exposure_areas"):
                 reply = (
-                    "카피를 만들기 전에 혜택을 확정해 주세요. "
-                    "혜택이 없다면 ‘혜택 없음’이라고 말씀해 주세요."
+                    "카피보다 먼저 전시 영역과 추천 배너를 정해야 합니다. "
+                    "‘전시안 추천해줘’라고 말씀해 주세요."
                 )
             else:
-                movie_policy = assess_movie_copy(campaign)
-                if not movie_policy["ready"]:
-                    reply = (
-                        f"{movie_policy['message']}\n\n"
-                        f"적용 근거: {movie_policy['source']}"
-                    )
-                else:
-                    invalidate_confirmation()
-                    generated = generate_copy(campaign)
-                    campaign.update(generated)
-                    display_insight = recommend_home_display(campaign)
-                    reply = (
-                        f"카피를 생성했습니다.\n\n"
-                        f"이벤트명: {generated['event_name']}\n\n"
-                        f"이벤트 카피: {generated['copy']}\n\n"
-                        "적용 근거: 캠페인 상태판의 확정 정보, "
-                        f"{movie_policy['source']}, {display_insight['source']}\n\n"
-                        f"영화 카피 적용 방향: {movie_policy['guidance']}\n\n"
-                        f"홈 전시 적용 방향: {display_insight['copy_guidance']}\n\n"
-                        "미적용: 웹 검색·최신 작품 정보\n\n"
-                        "왼쪽 상태판에서 직접 수정할 수 있습니다."
-                    )
+                reply = (
+                    "확정된 배너 카피는 왼쪽 기획안에 적용되어 있습니다. "
+                    "수정할 영역과 문구 방향을 말씀해 주세요."
+                )
         elif extracted:
             invalidate_confirmation()
             campaign_before_update = dict(st.session_state.campaign)
@@ -349,29 +407,7 @@ with chat_col:
                     )
         elif benefit_recommendation_requested:
             reply = benefit_recommendation(st.session_state.campaign)
-        elif display_recommendation_requested:
-            recommendation = recommend_home_display(st.session_state.campaign)
-            st.session_state.campaign["exposure_areas"] = recommendation["areas"]
-            recommended_assets = recommendation_to_assets(
-                recommendation["areas"],
-                st.session_state.campaign,
-            )
-            st.session_state.campaign["assets"] = recommended_assets
-            st.session_state.campaign["mermaid_code"] = make_mermaid(recommended_assets)
-            st.session_state.campaign["userflow_confirmed"] = False
-            st.session_state.campaign["review_passed"] = False
-            st.session_state["selected_banner_types"] = [
-                asset["type"] for asset in recommended_assets
-            ]
-            reply = (
-                "홈 전시 구좌를 추천하고 Userflow·배너 에셋 초안에 자동 반영했습니다.\n\n"
-                f"추천 구좌: {' · '.join(recommendation['areas'])}\n\n"
-                f"권장 흐름: {recommendation['flow']}\n\n"
-                f"추천 이유: {recommendation['reason']}\n\n"
-                f"적용 근거: {recommendation['source']}\n\n"
-                "아래 Userflow 및 배너 에셋에서 이미지·랜딩·GNB 등 빈 필수값을 "
-                "입력한 뒤 저장하고 Userflow를 확정해 주세요."
-            )
+
         elif reference_urls:
             reply = (
                 "참고 URL을 상태판에 저장했습니다. "
@@ -384,6 +420,57 @@ with chat_col:
         st.session_state.messages.append({"role": "assistant", "content": reply})
         save()
         st.rerun()
+
+    if st.session_state.pending_display_recommendation:
+        st.caption("전시안 확인 대기 · 확정 후 영역별 카피가 생성됩니다.")
+        if st.button(
+            "전시안 확정 · 영역별 카피 만들기",
+            type="primary",
+            width="stretch",
+            key="confirm_display_plan_chat",
+        ):
+            _, reply = confirm_display_plan()
+            st.session_state.messages.append(
+                {"role": "assistant", "content": reply}
+            )
+            st.rerun()
+
+    st.caption("AI 지식·규격 정보")
+    with st.expander("현재 AI 지식 연결 상태", expanded=False):
+        st.markdown(
+            """
+            - ✅ 캠페인 상태판의 확정 정보
+            - ✅ 영화 PPV 마케팅 인사이트 PDF — 카피 안전 기준에 연결
+            - ✅ HOME_DISPLAY 핵심 전시 구좌 인사이트 PDF — 로컬 추천 로직에 연결
+            - ⏳ 웹 검색·최신 작품 정보 — API 연결 전
+            - ✅ B tv JSON·Mermaid 시스템 계약 — 로컬 검증기에 연결
+            - ✅ Google Sheets 배너·텍스트 규격 — 배너별 글자 수 제한에 연결
+            """
+        )
+    with st.expander("지식·시스템 규격 정리표", expanded=False):
+        st.dataframe(
+            SLOT_CONTRACTS,
+            column_config={
+                "knowledge_name": "지식문서 구좌명",
+                "json_type": "JSON type",
+                "settings": "고정 적용 규칙",
+                "owner": "판단 근거",
+                "status": "상태",
+            },
+            hide_index=True,
+            width="stretch",
+        )
+        issues = unresolved_issues()
+        if issues:
+            st.warning(
+                "확인 필요 항목은 시스템 계약 담당자 확인 전 자동 출력하지 않습니다."
+            )
+            for issue in issues:
+                st.markdown(
+                    f"**{issue['id']} · {issue['topic']}**  \n"
+                    f"{issue['issue']}  \n"
+                    f"임시 규칙: {issue['temporary_rule']}"
+                )
 
 with state_col:
     st.subheader("현재 캠페인")
@@ -437,11 +524,19 @@ with state_col:
         "목표 Capa", min_value=0, step=10_000,
         value=int(c["target_capa"] or 0), disabled=audience != "TARGET",
     )
-    event_name = st.text_input("이벤트명", value=c["event_name"])
+    copy_ready = bool(c.get("assets"))
+    event_name = st.text_input(
+        "이벤트명",
+        value=c["event_name"],
+        disabled=not copy_ready,
+        placeholder="전시안 확정 후 자동 생성",
+    )
     copy_text = st.text_area(
         "이벤트 카피",
         value=c.get("copy", ""),
         height=90,
+        disabled=not copy_ready,
+        placeholder="추천 배너 확정 후 영역별 규격에 맞춰 자동 생성",
     )
     reference_urls_text = st.text_area(
         "참고 URL",
@@ -490,16 +585,31 @@ with state_col:
     }
     preview_campaign = dict(c)
     preview_campaign.update(edited)
-    missing_basic_preview = validate_basic_info(preview_campaign)
-    save_col, confirm_col = st.columns(2)
+    missing_planning_preview = validate_planning_info(preview_campaign)
+    save_col, plan_col = st.columns([1, 2])
 
     def apply_edited_campaign() -> None:
+        planning_sensitive_keys = (
+            "product_name", "work_facts", "start_date", "end_date",
+            "audience_type", "benefit", "target_capa",
+        )
+        planning_sensitive = any(
+            edited[key] != c.get(key)
+            for key in planning_sensitive_keys
+        )
         capa_sensitive = any(
             edited[key] != c.get(key)
             for key in ("start_date", "end_date", "audience_type", "target_capa")
         )
         invalidate_confirmation()
         c.update(edited)
+        if planning_sensitive:
+            st.session_state.pending_display_recommendation = None
+            c["exposure_areas"] = []
+            c["assets"] = []
+            c["mermaid_code"] = ""
+            c["userflow_confirmed"] = False
+            c["review_passed"] = False
         if capa_sensitive:
             c["capa_checked"] = False
             c["available_capa"] = None
@@ -507,12 +617,12 @@ with state_col:
 
     with save_col:
         save_draft = st.button("임시 저장", width="stretch")
-    with confirm_col:
-        confirm_basic = st.button(
-            "기본정보 확정",
+    with plan_col:
+        suggest_display = st.button(
+            "전시 영역·추천 배너 제안",
             width="stretch",
             type="primary",
-            disabled=bool(missing_basic_preview),
+            disabled=bool(missing_planning_preview),
         )
 
     if save_draft:
@@ -522,18 +632,29 @@ with state_col:
         st.success("작성 중인 내용을 임시 저장했습니다.")
         st.rerun()
 
-    if missing_basic_preview:
-        st.caption("기본정보 확정 전 필요: " + ", ".join(missing_basic_preview))
+    if missing_planning_preview:
+        st.caption("전시안 제안 전 필요: " + ", ".join(missing_planning_preview))
 
-    if confirm_basic:
+    if suggest_display:
         apply_edited_campaign()
-        missing_basic = validate_basic_info(c)
-        c["status"] = "DRAFT" if missing_basic else "BASIC_CONFIRMED"
+        if (
+            c["audience_type"] == "TARGET"
+            and c.get("start_date")
+            and c.get("end_date")
+            and c.get("target_capa")
+        ):
+            result = capa_service.check(
+                c["start_date"], c["end_date"], c["target_capa"]
+            )
+            c["available_capa"] = result["available_capa"]
+            c["capa_checked"] = True
+            st.session_state.capa_result = result
+        recommendation = recommend_home_display(c)
+        st.session_state.pending_display_recommendation = recommendation
+        st.session_state.messages.append(
+            {"role": "assistant", "content": format_display_proposal(recommendation)}
+        )
         save()
-        if missing_basic:
-            st.error("기본정보 확정 전 필요한 항목: " + ", ".join(missing_basic))
-        else:
-            st.success("기본정보를 확정했습니다.")
         st.rerun()
 
     status_cols = st.columns(3)
@@ -553,19 +674,24 @@ st.markdown(
     f"텍스트 글자 수는 [B tv 배너 규격 Google Sheets]({TEXT_SPEC_SOURCE})를 적용합니다."
 )
 
-existing_by_type = {asset["type"]: asset for asset in st.session_state.campaign.get("assets", [])}
-selected_types = st.multiselect(
-    "Userflow에 포함할 배너를 순서대로 선택",
-    list(BANNER_SPECS.keys()),
-    default=list(existing_by_type.keys()),
-    format_func=lambda value: f"{BANNER_SPECS[value]['label']} · {value}",
-    key="selected_banner_types",
-)
+existing_by_type = {
+    asset["type"]: asset
+    for asset in st.session_state.campaign.get("assets", [])
+}
+selected_types = list(existing_by_type.keys())
+if selected_types:
+    st.success("확정한 전시안의 배너와 카피가 자동으로 적용되었습니다.")
+    st.markdown(
+        " → ".join(BANNER_SPECS[banner_type]["label"] for banner_type in selected_types)
+    )
+    st.caption("운영값을 바꾸려면 아래 배너별 직접 수정 영역을 펼쳐 주세요.")
+else:
+    st.info("채팅에서 전시안을 확정하면 추천 배너, 카피, Userflow가 여기에 자동으로 채워집니다.")
 draft_assets = []
 for banner_index, banner_type in enumerate(selected_types):
     asset = existing_by_type.get(banner_type, empty_asset(banner_type))
     spec = BANNER_SPECS[banner_type]
-    with st.expander(f"{banner_index + 1}. {spec['label']} · {banner_type}", expanded=True):
+    with st.expander(f"직접 수정 · {banner_index + 1}. {spec['label']}", expanded=False):
         asset_name = st.text_input(
             "name",
             value=asset["name"],
@@ -625,28 +751,19 @@ for banner_index, banner_type in enumerate(selected_types):
                 )
         draft_assets.append({"name": asset_name, "type": banner_type, "data": asset_data})
 
-asset_save_col, flow_col = st.columns(2)
-with asset_save_col:
-    if st.button("배너 에셋 저장", width="stretch"):
-        invalidate_confirmation()
-        st.session_state.campaign["assets"] = draft_assets
-        st.session_state.campaign["mermaid_code"] = make_mermaid(draft_assets)
-        st.session_state.campaign["userflow_confirmed"] = False
-        st.session_state.campaign["review_passed"] = False
-        save()
-        st.success("계약 구조를 유지하여 배너 에셋을 저장했습니다.")
-        st.rerun()
-with flow_col:
-    if st.button(
-        "Userflow 확정",
-        width="stretch",
-        disabled=not st.session_state.campaign.get("assets"),
-    ):
-        st.session_state.campaign["mermaid_code"] = make_mermaid(st.session_state.campaign["assets"])
-        st.session_state.campaign["userflow_confirmed"] = True
-        st.session_state.campaign["review_passed"] = False
-        save()
-        st.rerun()
+if selected_types and st.button(
+    "운영값 수정 내용 적용",
+    width="stretch",
+    key="apply_asset_edits",
+):
+    invalidate_confirmation()
+    st.session_state.campaign["assets"] = draft_assets
+    st.session_state.campaign["mermaid_code"] = make_mermaid(draft_assets)
+    st.session_state.campaign["userflow_confirmed"] = True
+    st.session_state.campaign["review_passed"] = False
+    save()
+    st.success("수정 내용과 Userflow를 함께 적용했습니다.")
+    st.rerun()
 
 if st.session_state.campaign.get("mermaid_code"):
     with st.expander("확정 대상 Mermaid 코드", expanded=False):
@@ -685,102 +802,71 @@ if movie_copy_policy["applies"]:
             """
         )
 
-st.subheader("실행 단계")
-action_cols = st.columns(5)
+st.subheader("다음 단계")
+current_campaign = st.session_state.campaign
 
-with action_cols[0]:
-    if st.button("1. Capa 조회", width="stretch"):
-        c = st.session_state.campaign
-        if c["audience_type"] != "TARGET":
-            st.info("MASS 캠페인은 Capa 조회가 필요하지 않습니다.")
-        elif not all((c["start_date"], c["end_date"], c["target_capa"])):
-            st.error("기간과 목표 Capa를 먼저 입력해 주세요.")
-        else:
-            result = capa_service.check(c["start_date"], c["end_date"], c["target_capa"])
-            c["available_capa"] = result["available_capa"]
-            c["capa_checked"] = True
-            st.session_state.capa_result = result
-            save()
-            st.rerun()
-
-with action_cols[1]:
-    if st.button("2. 카피 생성", width="stretch"):
-        if not st.session_state.campaign["product_name"]:
-            st.error("상품명을 먼저 입력해 주세요.")
-        elif (
-            st.session_state.campaign.get("benefit_pending")
-            or not st.session_state.campaign.get("benefit")
-        ):
-            st.error(
-                "카피 생성 전에 혜택을 확정해 주세요. "
-                "혜택이 없는 캠페인은 ‘혜택 없음’으로 확정할 수 있습니다."
-            )
-        else:
-            movie_policy = assess_movie_copy(st.session_state.campaign)
-            if not movie_policy["ready"]:
-                st.error(movie_policy["message"])
-            else:
-                invalidate_confirmation()
-                st.session_state.campaign.update(generate_copy(st.session_state.campaign))
-                save()
-                st.rerun()
-
-with action_cols[2]:
-    policy_ack = st.checkbox("카피·정책 검수 완료", key="policy_ack")
-    if st.button("3. 에셋 검수", width="stretch"):
+if not current_campaign.get("assets"):
+    if st.session_state.pending_display_recommendation:
+        st.info("채팅에서 추천 전시안을 확인하고 확정해 주세요.")
+    else:
+        st.info("캠페인 정보를 입력한 뒤 ‘전시 영역·추천 배너 제안’을 진행해 주세요.")
+elif not current_campaign.get("review_passed"):
+    st.caption("영역별 카피와 Userflow가 자동 적용되었습니다. 규격 검사를 진행합니다.")
+    if st.button(
+        "기획안 검수 완료",
+        width="stretch",
+        type="primary",
+        key="review_plan",
+    ):
         errors = []
-        for asset in st.session_state.campaign.get("assets", []):
+        for asset in current_campaign.get("assets", []):
             errors.extend(validate_asset(asset))
-        if not st.session_state.campaign.get("userflow_confirmed"):
-            errors.append("Userflow가 확정되지 않았습니다.")
-        if not policy_ack:
-            errors.append("카피·정책 검수 확인이 필요합니다.")
+        if not current_campaign.get("userflow_confirmed"):
+            errors.append("Userflow가 생성되지 않았습니다.")
         if errors:
             st.error("\n".join(errors))
         else:
-            st.session_state.campaign["review_passed"] = True
+            current_campaign["review_passed"] = True
             save()
-            st.success("매니저님, 이 기획안은 체크리스트 항목을 모두 통과하여 안전성이 검증되었습니다.")
+            st.success("카피·배너 규격과 Userflow 검수를 통과했습니다.")
             st.rerun()
-
-with action_cols[3]:
-    if st.button("4. 최종 확정 · JSON 출력", width="stretch", type="primary"):
-        missing = validate_for_confirmation(st.session_state.campaign)
+elif not st.session_state.admin_payload:
+    if st.button(
+        "최종 확정 · JSON 생성",
+        width="stretch",
+        type="primary",
+        key="finalize_plan",
+    ):
+        missing = validate_for_confirmation(current_campaign)
         if missing:
             st.error("최종 출력 전 필요한 항목: " + ", ".join(missing))
         else:
-            payload = to_admin_payload(st.session_state.campaign)
+            payload = to_admin_payload(current_campaign)
             errors = validate_contract(payload)
             if errors:
                 st.error("시스템 연동 규격 불일치:\n" + "\n".join(errors))
             else:
-                st.session_state.campaign["status"] = "CONFIRMED"
+                current_campaign["status"] = "CONFIRMED"
                 st.session_state.admin_payload = payload
                 save()
                 st.rerun()
-
-with action_cols[4]:
+else:
+    output_col, admin_col = st.columns(2)
     payload = st.session_state.admin_payload
-    if payload:
+    with output_col:
         st.download_button(
-            "5. JSON 저장",
+            "JSON 다운로드",
             json.dumps(payload, ensure_ascii=False, indent=2),
-            file_name=f"{st.session_state.campaign['campaign_id']}.json",
+            file_name=f"{current_campaign['campaign_id']}.json",
             mime="application/json",
             width="stretch",
         )
-    else:
-        st.button("5. JSON 저장", disabled=True, width="stretch")
-
-if st.session_state.admin_payload:
-    admin_col, _ = st.columns([1, 4])
     with admin_col:
         admin_base_url = os.getenv(
             "ADMIN_BASE_URL",
             "https://btvcuration.github.io/campaign/",
         )
-        st.link_button("6. B tv 어드민 이동", admin_base_url, width="stretch")
-
+        st.link_button("B tv 어드민 이동", admin_base_url, width="stretch")
 if st.session_state.capa_result:
     result = st.session_state.capa_result
     if result["is_possible"]:

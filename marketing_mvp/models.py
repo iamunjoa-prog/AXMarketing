@@ -56,6 +56,25 @@ def validate_basic_info(campaign: dict[str, Any]) -> list[str]:
     return missing
 
 
+def validate_planning_info(campaign: dict[str, Any]) -> list[str]:
+    labels = {
+        "product_name": "상품명",
+        "audience_type": "MASS/TARGET",
+        "benefit": "혜택",
+    }
+    missing = [label for key, label in labels.items() if not campaign.get(key)]
+    if not campaign.get("schedule_pending"):
+        if not campaign.get("start_date"):
+            missing.append("시작일")
+        if not campaign.get("end_date"):
+            missing.append("종료일")
+    if campaign.get("audience_type") == "TARGET" and not campaign.get("target_capa"):
+        missing.append("목표 Capa")
+    if campaign.get("has_coupon") == "Y" and not campaign.get("coupon_benefit"):
+        missing.append("쿠폰 혜택")
+    return missing
+
+
 def validate_for_confirmation(campaign: dict[str, Any]) -> list[str]:
     missing = validate_basic_info(campaign)
     if not campaign.get("userflow_confirmed"):
