@@ -38,9 +38,22 @@ def is_affirmative_response(text: str) -> bool:
     }
     contextual_match = (
         normalized.startswith(("응", "웅", "네", "넵", "예", "좋아", "그래"))
-        and any(word in normalized for word in ("다음", "진행", "해줘", "시작", "확정", "적용"))
+        and any(
+            word in normalized
+            for word in ("좋아", "다음", "진행", "해줘", "시작", "확정", "적용")
+        )
     )
-    return exact_match or contextual_match
+    recommendation_confirmation = (
+        any(
+            phrase in normalized
+            for phrase in ("추천해준", "추천한", "제안해준", "제안한", "아까추천")
+        )
+        and any(
+            action in normalized
+            for action in ("진행", "확정", "적용", "해줘", "할게")
+        )
+    )
+    return exact_match or contextual_match or recommendation_confirmation
 
 
 def is_campaign_reset_request(text: str) -> bool:

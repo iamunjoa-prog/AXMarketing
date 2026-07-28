@@ -9,6 +9,31 @@ def extract_reference_urls(text: str) -> list[str]:
     return re.findall(r"https?://[^\s<>]+", text)
 
 
+def normalize_product_name(value: str) -> str:
+    """Remove conversational PPV intent prefixes from a stored product name."""
+    cleaned = value.strip()
+    clauses = [
+        clause.strip()
+        for clause in re.split(r"[.!?。]+", cleaned)
+        if clause.strip()
+    ]
+    if (
+        len(clauses) >= 2
+        and re.search(
+            r"(?<![A-Za-z])PPV(?![A-Za-z]).*(?:프로모션|이벤트)",
+            clauses[0],
+            re.IGNORECASE,
+        )
+    ):
+        cleaned = clauses[-1]
+        cleaned = re.sub(
+            r"^(?:작품|콘텐츠|영화)(?:명)?(?:은|는|이|가|:)?\s*",
+            "",
+            cleaned,
+        ).strip()
+    return cleaned
+
+
 def _number(text: str) -> int:
     clean = text.replace(",", "").strip()
     match = re.match(r"(\d+(?:\.\d+)?)\s*(만|천)?", clean)
@@ -138,19 +163,27 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
     elif has_schedule_flexibility:
         result["schedule_note"] = text.strip().rstrip(".。")
 
+    normalized_product_name = normalize_product_name(text)
+    if normalized_product_name != text.strip():
+        result["product_name"] = normalized_product_name
+        result["product_type"] = "PPV"
+        if re.search(r"^\s*영화", text):
+            result["product_category"] = "영화"
+
     movie_title_patterns = [
         r"^\s*영화\s+([^,，]+?)(?:\s*[,，]|$)",
         r"^\s*([^,，]+?)\s+영화\s*(?:[,，]|$)",
     ]
-    for pattern in movie_title_patterns:
-        movie_title = re.search(pattern, text, re.IGNORECASE)
-        if movie_title:
-            value = movie_title.group(1).strip()
-            if value:
-                result["product_name"] = value
-                result["product_type"] = "PPV"
-                result["product_category"] = "영화"
-                break
+    if not result.get("product_name"):
+        for pattern in movie_title_patterns:
+            movie_title = re.search(pattern, text, re.IGNORECASE)
+            if movie_title:
+                value = movie_title.group(1).strip()
+                if value:
+                    result["product_name"] = value
+                    result["product_type"] = "PPV"
+                    result["product_category"] = "영화"
+                    break
 
     if re.fullmatch(r"\s*영화\s*", text):
         result["product_category"] = "영화"

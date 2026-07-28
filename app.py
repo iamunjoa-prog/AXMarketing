@@ -40,6 +40,7 @@ recommendation_to_assets = knowledge_contract_module.recommendation_to_assets
 unresolved_issues = knowledge_contract_module.unresolved_issues
 extract_fields = extractor_module.extract_fields
 extract_reference_urls = extractor_module.extract_reference_urls
+normalize_product_name = extractor_module.normalize_product_name
 BANNER_SPECS = contract_module.BANNER_SPECS
 OBSERVED_GNB_VALUES = contract_module.OBSERVED_GNB_VALUES
 TEXT_SPEC_SOURCE = contract_module.TEXT_SPEC_SOURCE
@@ -130,6 +131,23 @@ st.markdown(
     }
     .stApp {background: #f4f5f7;}
     div[data-testid="stMetric"] {background: #f7f8fb; padding: .8rem; border-radius: 12px;}
+    .campaign-status-bar {
+        display: flex;
+        align-items: center;
+        gap: .7rem;
+        margin: .25rem 0 .65rem;
+        padding: .58rem .75rem;
+        background: #f7f8fb;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        color: #667085;
+        font-size: .78rem;
+    }
+    .campaign-status-bar strong {
+        color: #1f2937;
+        font-weight: 600;
+    }
+    .campaign-status-bar .status-dot {color: #c4c9d2;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -144,6 +162,22 @@ if "campaign" not in st.session_state:
     st.session_state.campaign = campaign
 for key, default_value in empty_campaign().items():
     st.session_state.campaign.setdefault(key, default_value)
+
+stored_product_name = st.session_state.campaign.get("product_name", "")
+normalized_stored_product = normalize_product_name(stored_product_name)
+if stored_product_name and normalized_stored_product != stored_product_name:
+    st.session_state.campaign["product_name"] = normalized_stored_product
+    st.session_state.campaign["event_name"] = ""
+    st.session_state.campaign["copy"] = ""
+    st.session_state.campaign["exposure_areas"] = []
+    st.session_state.campaign["assets"] = []
+    st.session_state.campaign["mermaid_code"] = ""
+    st.session_state.campaign["userflow_confirmed"] = False
+    st.session_state.campaign["review_passed"] = False
+    st.session_state.campaign["status"] = "DRAFT"
+    st.session_state.pending_display_recommendation = None
+    st.session_state.admin_payload = None
+    repo.save(st.session_state.campaign)
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
@@ -406,13 +440,12 @@ with chat_col:
                         reply = "일정을 미정 상태로 저장했습니다."
                     if schedule_note_value:
                         reply += f" 일정 메모도 반영했습니다: {schedule_note_value}"
-                    else:
-                        reply += " 기간 단축이나 변경 가능성이 있으면 이어서 말씀해 주세요."
                 else:
                     reply = (
                         f"일정은 이미 {start_value}부터 {end_value}까지로 저장되어 있습니다. "
-                        "변경하거나 추가로 메모할 내용이 있으면 말씀해 주세요."
+                        "변경할 내용이 있으면 말씀해 주세요."
                     )
+                reply += f" {next_question(st.session_state.campaign)}"
             elif actual_changed_keys:
                 changed = ", ".join(labels[key] for key in actual_changed_keys)
                 if benefit_recommendation_requested:
@@ -560,7 +593,7 @@ with state_col:
             product_category = ""
 
     st.caption("일정 및 대상")
-    start_col, end_col, pending_col = st.columns([1, 1, 0.72])
+    start_col, end_col, pending_col = st.columns([1, 1, 0.55])
     with pending_col:
         schedule_pending = st.checkbox(
             "일정 미정",
@@ -580,9 +613,7 @@ with state_col:
             disabled=schedule_pending,
         )
 
-    audience_col, capa_col, benefit_col, benefit_pending_col = st.columns(
-        [0.85, 1.05, 2.15, 0.78]
-    )
+    audience_col, campaign_detail_col = st.columns([0.82, 3.43])
     with audience_col:
         audience = st.selectbox(
             "진행 방식",
@@ -591,27 +622,34 @@ with state_col:
             if c["audience_type"] in ("MASS", "TARGET") else 0,
             format_func=lambda value: value or "선택",
         )
-    with capa_col:
-        target_capa = st.number_input(
-            "목표 Capa",
-            min_value=0,
-            step=10_000,
-            value=int(c["target_capa"] or 0),
-            disabled=audience != "TARGET",
-        )
-    with benefit_pending_col:
-        benefit_pending = st.checkbox(
-            "혜택 미정",
-            value=c.get("benefit_pending", False),
-            help="미정이어도 전시 구조를 먼저 기획할 수 있습니다.",
-        )
-    with benefit_col:
-        benefit = st.text_input(
-            "혜택",
-            value=c["benefit"],
-            disabled=benefit_pending,
-            placeholder="예: 신규 가입 시 첫 달 50% 할인",
-        )
+    with campaign_detail_col:
+        if audience == "TARGET":
+            capa_col, benefit_col, benefit_pending_col = st.columns(
+                [1, 2.15, 0.58]
+            )
+            with capa_col:
+                target_capa = st.number_input(
+                    "목표 Capa",
+                    min_value=0,
+                    step=10_000,
+                    value=int(c["target_capa"] or 0),
+                )
+        else:
+            benefit_col, benefit_pending_col = st.columns([2.85, 0.58])
+            target_capa = None
+        with benefit_pending_col:
+            benefit_pending = st.checkbox(
+                "혜택 미정",
+                value=c.get("benefit_pending", False),
+                help="미정이어도 전시 구조를 먼저 기획할 수 있습니다.",
+            )
+        with benefit_col:
+            benefit = st.text_input(
+                "혜택",
+                value=c["benefit"],
+                disabled=benefit_pending,
+                placeholder="예: 신규 가입 시 첫 달 50% 할인",
+            )
 
     copy_ready = bool(c.get("assets"))
     if copy_ready:
@@ -704,7 +742,6 @@ with state_col:
     preview_campaign = dict(c)
     preview_campaign.update(edited)
     missing_planning_preview = validate_planning_info(preview_campaign)
-    save_col, plan_col = st.columns([1, 2])
 
     def apply_edited_campaign() -> None:
         planning_sensitive_keys = (
@@ -734,11 +771,35 @@ with state_col:
             c["available_capa"] = None
             st.session_state.capa_result = None
 
+    status_label = {
+        "DRAFT": "작성 중",
+        "BASIC_CONFIRMED": "기본정보 확정",
+        "CONFIRMED": "최종 확정",
+    }.get(c["status"], c["status"])
+    capa_status = (
+        f"{c['available_capa']:,}명"
+        if c.get("available_capa")
+        else "미조회"
+    )
+    st.markdown(
+        (
+            '<div class="campaign-status-bar">'
+            f'<span>상태 <strong>{status_label}</strong></span>'
+            '<span class="status-dot">·</span>'
+            f'<span>Capa <strong>{capa_status}</strong></span>'
+            '<span class="status-dot">·</span>'
+            f'<span>추천 배너 <strong>{len(c.get("assets", []))}개</strong></span>'
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    save_col, plan_col = st.columns([0.72, 1.65])
     with save_col:
         save_draft = st.button("임시 저장", width="stretch")
     with plan_col:
         suggest_display = st.button(
-            "전시 영역·추천 배너 제안",
+            "전시 영역 제안받기 →",
             width="stretch",
             type="primary",
             disabled=bool(missing_planning_preview),
@@ -776,15 +837,6 @@ with state_col:
         save()
         st.rerun()
 
-    status_cols = st.columns(3)
-    status_label = {
-        "DRAFT": "작성 중",
-        "BASIC_CONFIRMED": "기본정보 확정",
-        "CONFIRMED": "최종 확정",
-    }.get(c["status"], c["status"])
-    status_cols[0].metric("상태", status_label)
-    status_cols[1].metric("가능 Capa", f"{c['available_capa']:,}" if c["available_capa"] else "미조회")
-    status_cols[2].metric("배너", f"{len(c.get('assets', []))}개")
 
 st.divider()
 st.subheader("Userflow 및 배너 에셋")
