@@ -5,10 +5,14 @@ import unittest
 from marketing_mvp.extractor import extract_fields, normalize_product_name
 from marketing_mvp.models import validate_planning_info
 from marketing_mvp.workflow import (
+    extract_copy_option_choice,
     is_affirmative_response,
     is_campaign_reset_request,
+    is_copy_revision_request,
     is_display_plan_request,
+    is_period_recommendation_request,
     next_question,
+    period_recommendation,
 )
 
 
@@ -36,6 +40,44 @@ class PlanningFlowTests(unittest.TestCase):
 
     def test_new_campaign_intent_is_not_extracted_as_product(self) -> None:
         self.assertNotIn("product_name", extract_fields("다른 프로모션 기획할게"))
+
+    def test_mass_intent_is_not_saved_as_product_name(self) -> None:
+        extracted = extract_fields("Mass 프로모션 진행하려고")
+        self.assertEqual(extracted["audience_type"], "MASS")
+        self.assertNotIn("product_name", extracted)
+
+    def test_known_ppm_product_is_understood_without_reasking(self) -> None:
+        extracted = extract_fields("PPM CJ ENM이야")
+        self.assertEqual(extracted["product_name"], "CJ ENM")
+        self.assertEqual(extracted["product_type"], "PPM")
+        self.assertEqual(extracted["product_category"], "월정액")
+        for product in ("JTBC", "TV조선", "채널A", "지상파 3사", "B tv+"):
+            with self.subTest(product=product):
+                known = extract_fields(f"{product}이야")
+                self.assertEqual(known["product_name"], product)
+                self.assertEqual(known["product_type"], "PPM")
+
+    def test_period_recommendation_offer_and_acceptance(self) -> None:
+        question = next_question(
+            {
+                "product_name": "CJ ENM",
+                "product_type": "PPM",
+                "audience_type": "MASS",
+            }
+        )
+        self.assertIn("기간을 추천", question)
+        self.assertTrue(
+            is_period_recommendation_request("응", question)
+        )
+        self.assertIn(
+            "4주",
+            period_recommendation({"product_type": "PPM"}),
+        )
+
+    def test_copy_revision_and_option_choice_are_detected(self) -> None:
+        self.assertTrue(is_copy_revision_request("카피가 너무 별로야"))
+        self.assertTrue(is_copy_revision_request("카피명 다시 수정해줘"))
+        self.assertEqual(extract_copy_option_choice("2번으로 해줘", 3), 1)
 
     def test_ppv_intent_sentence_is_not_saved_as_movie_title(self) -> None:
         extracted = extract_fields(

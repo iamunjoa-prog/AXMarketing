@@ -5,6 +5,16 @@ from datetime import date
 from typing import Any
 
 
+KNOWN_PPM_PRODUCTS = [
+    "CJ ENM",
+    "JTBC",
+    "TV조선",
+    "채널A",
+    "지상파 3사",
+    "B tv+",
+]
+
+
 def extract_reference_urls(text: str) -> list[str]:
     return re.findall(r"https?://[^\s<>]+", text)
 
@@ -31,6 +41,8 @@ def normalize_product_name(value: str) -> str:
             "",
             cleaned,
         ).strip()
+    if cleaned.upper().replace(" ", "") in {"MASS", "TARGET", "PPV", "PPM"}:
+        return ""
     return cleaned
 
 
@@ -98,15 +110,43 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
     if audience:
         result["audience_type"] = audience.group(1).upper()
 
+    compact_text = re.sub(r"\s+", "", text).lower()
+    known_ppm_product = next(
+        (
+            product
+            for product in KNOWN_PPM_PRODUCTS
+            if re.sub(r"\s+", "", product).lower() in compact_text
+        ),
+        "",
+    )
     is_ppm = (
         re.search(r"(?<![A-Za-z])PPM(?![A-Za-z])", text, re.IGNORECASE)
         or "월정액" in text
-        or re.search(r"(?<![A-Za-z])B\s*tv\s*\+", text, re.IGNORECASE)
+        or known_ppm_product
     )
     is_ppv = re.search(r"(?<![A-Za-z])PPV(?![A-Za-z])", text, re.IGNORECASE)
     if is_ppm:
         result["product_type"] = "PPM"
         result["product_category"] = "월정액"
+        if known_ppm_product:
+            result["product_name"] = known_ppm_product
+        else:
+            ppm_name_match = re.search(
+                r"(?<![A-Za-z])PPM(?![A-Za-z])\s+(.+)$",
+                text,
+                re.IGNORECASE,
+            )
+            if ppm_name_match:
+                ppm_product_name = re.sub(
+                    r"(?:이야|야|이에요|예요|입니다|이라고|라고)$",
+                    "",
+                    ppm_name_match.group(1).strip(),
+                ).strip()
+                normalized_ppm_name = ppm_product_name.upper().replace(" ", "")
+                if normalized_ppm_name not in {
+                    "", "MASS", "TARGET", "월정액", "상품", "프로모션", "이벤트",
+                }:
+                    result["product_name"] = ppm_product_name
     elif is_ppv:
         result["product_type"] = "PPV"
 
@@ -200,7 +240,11 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
             if product:
                 value = product.group(1).strip()
                 value = re.sub(r"^(?:이번|신규)\s+", "", value)
-                if value in {"다른", "새", "새로운", "신규"}:
+                normalized_value = value.upper().replace(" ", "")
+                if (
+                    value in {"다른", "새", "새로운", "신규"}
+                    or normalized_value in {"MASS", "TARGET", "PPV", "PPM"}
+                ):
                     continue
                 result["product_name"] = value
                 break

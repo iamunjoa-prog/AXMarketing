@@ -128,6 +128,13 @@ def _ppm_recommendation_to_assets(
     benefit = campaign.get("benefit") or ""
     copy = campaign.get("copy") or benefit
     short_copy = "지금 가입하기" if benefit == "혜택 없음" else benefit
+    normalized_benefit = " ".join(
+        benefit.replace("신규가입", "신규 가입").replace("첫달", "첫 달").split()
+    )
+    if "첫 달" in normalized_benefit and "50%" in normalized_benefit:
+        short_copy = "신규 가입 첫 달 50%"
+    elif benefit != "혜택 없음":
+        short_copy = normalized_benefit
     assets: list[dict[str, Any]] = []
     for banner_type, source_area in selected_types.items():
         asset = empty_asset(banner_type)
@@ -147,7 +154,7 @@ def _ppm_recommendation_to_assets(
         elif banner_type == "BIG_BANNER":
             if "가입하기" in source_area:
                 data["subType"] = "가입하기형"
-            set_text("mainTitle", product_name)
+            set_text("mainTitle", event_name)
             set_text("subTitle", short_copy)
             set_text("desc", copy)
             set_text("buttonText", "가입하기")

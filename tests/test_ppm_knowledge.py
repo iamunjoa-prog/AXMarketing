@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
-from marketing_mvp.copy_service import generate_copy
+from marketing_mvp.copy_service import copy_name_alternatives, generate_copy
 from marketing_mvp.extractor import extract_fields
 from marketing_mvp.home_display_insights import recommend_home_display
 from marketing_mvp.integration_contract import validate_asset
@@ -21,7 +21,7 @@ class PpmKnowledgeTests(unittest.TestCase):
             "신규가입시 첫달 50% 할인",
             today=date(2026, 7, 28),
         )
-        self.assertEqual(product["product_name"], "CJ ENM 방송 월정액")
+        self.assertEqual(product["product_name"], "CJ ENM")
         self.assertEqual(product["product_type"], "PPM")
         self.assertEqual(product["product_category"], "월정액")
         self.assertEqual(benefit["benefit"], "신규가입시 첫달 50% 할인")
@@ -33,7 +33,7 @@ class PpmKnowledgeTests(unittest.TestCase):
 
     def test_ppm_display_and_copy_follow_monthly_subscription_flow(self) -> None:
         campaign = {
-            "product_name": "CJ ENM 방송 월정액",
+            "product_name": "CJ ENM",
             "product_type": "PPM",
             "product_category": "월정액",
             "audience_type": "TARGET",
@@ -50,7 +50,11 @@ class PpmKnowledgeTests(unittest.TestCase):
         self.assertNotIn("시놉시스", recommendation["flow"])
 
         campaign.update(generate_copy(campaign))
+        self.assertEqual(campaign["event_name"], "CJ ENM 첫 달 반값")
         self.assertIn("신규 가입 시 첫 달 50% 할인", campaign["copy"])
+        alternatives = copy_name_alternatives(campaign)
+        self.assertEqual(len(alternatives), 3)
+        self.assertEqual(len(set(alternatives)), 3)
         assets = recommendation_to_assets(recommendation["areas"], campaign)
         self.assertEqual(
             [asset["type"] for asset in assets],
@@ -64,11 +68,13 @@ class PpmKnowledgeTests(unittest.TestCase):
             )
         big_banner = assets[-1]
         self.assertEqual(big_banner["data"]["subType"], "가입하기형")
+        self.assertIn("CJ ENM", big_banner["data"]["mainTitle"])
+        self.assertNotIn("MASS", big_banner["data"]["mainTitle"].upper())
 
     def test_ppm_knowledge_router_separates_general_and_btv_plus(self) -> None:
         general = assess_ppm_campaign(
             {
-                "product_name": "CJ ENM 방송 월정액",
+                "product_name": "CJ ENM",
                 "product_type": "PPM",
                 "benefit": "신규가입시 첫달 50% 할인",
             }

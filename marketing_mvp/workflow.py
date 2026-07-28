@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from marketing_mvp.integration_contract import ACTION, make_mermaid
@@ -18,7 +19,7 @@ def next_question(campaign: dict[str, Any]) -> str:
         not campaign.get("start_date")
         and not campaign.get("schedule_pending")
     ):
-        return "일정이 정해졌나요? 미정이면 ‘일정 미정’이라고 말씀해 주세요."
+        return "진행 기간이 정해졌나요? 아직 미정이라면 기간을 추천받아 보실래요?"
     if not campaign.get("benefit") and not campaign.get("benefit_pending"):
         return "혜택이 정해졌나요? 미정이면 ‘리워드 미정’이라고 말씀해 주세요."
     if campaign.get("audience_type") == "TARGET" and not campaign.get("target_capa"):
@@ -120,6 +121,62 @@ def benefit_recommendation(campaign: dict[str, Any]) -> str:
         "예상 구매자 수, 전체 리워드 예산, 검토 중인 경품 가격을 알려주시면 "
         "두 안의 비용 구조를 비교할 수 있습니다. 결정 전까지는 ‘리워드 미정’으로 저장할 수 있어요."
     )
+
+
+def is_period_recommendation_request(
+    text: str,
+    previous_assistant: str = "",
+) -> bool:
+    normalized = text.lower().replace(" ", "")
+    direct_request = (
+        any(word in normalized for word in ("기간", "일정"))
+        and any(word in normalized for word in ("추천", "제안", "정해줘"))
+    )
+    previous_normalized = previous_assistant.lower().replace(" ", "")
+    accepted_offer = (
+        is_affirmative_response(text)
+        and any(
+            phrase in previous_normalized
+            for phrase in ("기간을추천", "기간추천", "추천받아보실래요")
+        )
+    )
+    return direct_request or accepted_offer
+
+
+def period_recommendation(campaign: dict[str, Any]) -> str:
+    product_type = campaign.get("product_type")
+    if product_type == "PPM":
+        return (
+            "기본안으로는 월 단위 성과를 확인하기 쉬운 4주 운영을 추천해요. "
+            "시작하고 싶은 날짜나 월을 알려주시면 실제 기간으로 정리해드릴게요."
+        )
+    if product_type == "PPV":
+        return (
+            "기본안으로는 관심이 집중되는 2주 운영을 추천해요. "
+            "공개일이나 시작 희망일을 알려주시면 실제 기간으로 정리해드릴게요."
+        )
+    return "상품 유형을 알려주시면 PPV와 PPM에 맞는 기본 운영 기간을 제안해드릴게요."
+
+
+def is_copy_revision_request(text: str) -> bool:
+    normalized = text.lower().replace(" ", "")
+    has_copy_word = any(word in normalized for word in ("카피", "문구", "카피명"))
+    has_revision_word = any(
+        word in normalized
+        for word in (
+            "별로", "마음에안", "수정", "다시", "바꿔", "변경", "새로",
+            "다른안", "대안",
+        )
+    )
+    return has_copy_word and has_revision_word
+
+
+def extract_copy_option_choice(text: str, option_count: int = 3) -> int | None:
+    match = re.search(r"(?<!\d)([1-9])\s*번?", text)
+    if not match:
+        return None
+    choice = int(match.group(1)) - 1
+    return choice if 0 <= choice < option_count else None
 
 
 def is_copy_generation_request(text: str) -> bool:

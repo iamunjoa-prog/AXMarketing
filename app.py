@@ -32,6 +32,7 @@ knowledge_contract_module = importlib.reload(knowledge_contract_module)
 models_module = importlib.reload(models_module)
 workflow_module = importlib.reload(workflow_module)
 generate_copy = copy_service_module.generate_copy
+copy_name_alternatives = copy_service_module.copy_name_alternatives
 recommend_home_display = home_display_insights_module.recommend_home_display
 assess_movie_copy = movie_ppv_insights_module.assess_movie_copy
 assess_ppm_campaign = ppm_insights_module.assess_ppm_campaign
@@ -41,6 +42,7 @@ unresolved_issues = knowledge_contract_module.unresolved_issues
 extract_fields = extractor_module.extract_fields
 extract_reference_urls = extractor_module.extract_reference_urls
 normalize_product_name = extractor_module.normalize_product_name
+KNOWN_PPM_PRODUCTS = extractor_module.KNOWN_PPM_PRODUCTS
 BANNER_SPECS = contract_module.BANNER_SPECS
 OBSERVED_GNB_VALUES = contract_module.OBSERVED_GNB_VALUES
 TEXT_SPEC_SOURCE = contract_module.TEXT_SPEC_SOURCE
@@ -55,8 +57,12 @@ validate_planning_info = models_module.validate_planning_info
 validate_for_confirmation = models_module.validate_for_confirmation
 benefit_recommendation = workflow_module.benefit_recommendation
 is_benefit_recommendation_request = workflow_module.is_benefit_recommendation_request
+extract_copy_option_choice = workflow_module.extract_copy_option_choice
 is_copy_generation_request = workflow_module.is_copy_generation_request
+is_copy_revision_request = workflow_module.is_copy_revision_request
 is_display_plan_request = workflow_module.is_display_plan_request
+is_period_recommendation_request = workflow_module.is_period_recommendation_request
+period_recommendation = workflow_module.period_recommendation
 is_affirmative_response = workflow_module.is_affirmative_response
 is_campaign_reset_request = workflow_module.is_campaign_reset_request
 is_contextual_no_benefit_response = workflow_module.is_contextual_no_benefit_response
@@ -166,6 +172,18 @@ for key, default_value in empty_campaign().items():
 stored_product_name = st.session_state.campaign.get("product_name", "")
 normalized_stored_product = normalize_product_name(stored_product_name)
 if stored_product_name and normalized_stored_product != stored_product_name:
+    if not normalized_stored_product:
+        for message in reversed(st.session_state.get("messages", [])):
+            if message.get("role") != "user":
+                continue
+            recovered = extract_fields(message.get("content", ""))
+            if recovered.get("product_name"):
+                normalized_stored_product = recovered["product_name"]
+                if recovered.get("product_type"):
+                    st.session_state.campaign["product_type"] = recovered["product_type"]
+                if recovered.get("product_category"):
+                    st.session_state.campaign["product_category"] = recovered["product_category"]
+                break
     st.session_state.campaign["product_name"] = normalized_stored_product
     st.session_state.campaign["event_name"] = ""
     st.session_state.campaign["copy"] = ""
@@ -192,6 +210,8 @@ if "capa_result" not in st.session_state:
     st.session_state.capa_result = None
 if "pending_display_recommendation" not in st.session_state:
     st.session_state.pending_display_recommendation = None
+if "pending_copy_names" not in st.session_state:
+    st.session_state.pending_copy_names = []
 
 # Older saved drafts could have been marked as basic-confirmed before event
 # copy became a required field. Reopen those campaigns as drafts.
@@ -211,6 +231,7 @@ def reset_campaign_state() -> None:
     campaign["campaign_id"] = f"CMP-{uuid.uuid4().hex[:8].upper()}"
     st.session_state.campaign = campaign
     st.session_state.pending_display_recommendation = None
+    st.session_state.pending_copy_names = []
     st.session_state.admin_payload = None
     st.session_state.capa_result = None
     st.session_state["selected_banner_types"] = []
@@ -252,8 +273,11 @@ def format_display_proposal(recommendation: dict[str, object]) -> str:
     )
 
 
-def format_banner_copy_result(assets: list[dict[str, object]]) -> str:
-    sections = ["전시안을 확정하고 영역별 카피를 자동 적용했습니다."]
+def format_banner_copy_result(
+    assets: list[dict[str, object]],
+    intro: str = "전시안을 확정하고 영역별 카피를 자동 적용했습니다.",
+) -> str:
+    sections = [intro]
     for asset in assets:
         banner_type = str(asset["type"])
         spec = BANNER_SPECS[banner_type]
@@ -268,6 +292,50 @@ def format_banner_copy_result(assets: list[dict[str, object]]) -> str:
             sections.append("\n".join(lines))
     sections.append("왼쪽 기획안에 카피와 Userflow가 채워졌습니다.")
     return "\n\n".join(sections)
+
+
+def format_copy_name_options(options: list[str]) -> str:
+    option_lines = "\n".join(
+        f"{index}. **{option}**"
+        for index, option in enumerate(options, start=1)
+    )
+    return (
+        "카피명을 다른 방향으로 다시 제안할게요.\n\n"
+        f"{option_lines}\n\n"
+        "원하는 번호를 말씀해 주시면 모든 배너 문구에 맞춰 다시 적용할게요."
+    )
+
+
+def offer_copy_name_alternatives() -> tuple[bool, str]:
+    campaign = st.session_state.campaign
+    if not campaign.get("exposure_areas") or not campaign.get("assets"):
+        return False, "먼저 전시안을 확정하면 카피명을 여러 방향으로 다시 제안할 수 있어요."
+    options = copy_name_alternatives(campaign)
+    st.session_state.pending_copy_names = options
+    return True, format_copy_name_options(options)
+
+
+def apply_copy_name_choice(choice: int) -> tuple[bool, str]:
+    options = st.session_state.pending_copy_names
+    if not options or not 0 <= choice < len(options):
+        return False, "추천한 카피명 중 원하는 번호를 말씀해 주세요."
+    campaign = st.session_state.campaign
+    campaign["event_name"] = options[choice]
+    assets = recommendation_to_assets(campaign["exposure_areas"], campaign)
+    campaign["assets"] = assets
+    campaign["mermaid_code"] = make_mermaid(assets)
+    campaign["review_passed"] = False
+    campaign["status"] = "BASIC_CONFIRMED"
+    st.session_state["selected_banner_types"] = [
+        asset["type"] for asset in assets
+    ]
+    st.session_state.pending_copy_names = []
+    st.session_state.admin_payload = None
+    save()
+    return True, format_banner_copy_result(
+        assets,
+        intro="선택한 카피명으로 영역별 문구를 다시 적용했습니다.",
+    )
 
 
 def confirm_display_plan() -> tuple[bool, str]:
@@ -291,6 +359,7 @@ def confirm_display_plan() -> tuple[bool, str]:
         asset["type"] for asset in assets
     ]
     st.session_state.pending_display_recommendation = None
+    st.session_state.pending_copy_names = []
     st.session_state.admin_payload = None
     save()
     return True, format_banner_copy_result(assets)
@@ -338,6 +407,15 @@ with chat_col:
             )
         benefit_recommendation_requested = is_benefit_recommendation_request(prompt)
         affirmative_requested = is_affirmative_response(prompt)
+        period_recommendation_requested = is_period_recommendation_request(
+            prompt,
+            previous_assistant,
+        )
+        copy_revision_requested = is_copy_revision_request(prompt)
+        copy_option_choice = extract_copy_option_choice(
+            prompt,
+            len(st.session_state.pending_copy_names),
+        )
         display_plan_confirmation_requested = (
             affirmative_requested
             and st.session_state.pending_display_recommendation is not None
@@ -361,7 +439,9 @@ with chat_col:
             # itself for a confirmed benefit.
             extracted.pop("benefit", None)
             extracted.pop("benefit_pending", None)
-        if display_plan_confirmation_requested:
+        if copy_option_choice is not None and st.session_state.pending_copy_names:
+            _, reply = apply_copy_name_choice(copy_option_choice)
+        elif display_plan_confirmation_requested:
             campaign = st.session_state.campaign
             if extracted:
                 invalidate_confirmation()
@@ -383,6 +463,10 @@ with chat_col:
                 recommendation = recommend_home_display(campaign)
                 st.session_state.pending_display_recommendation = recommendation
                 reply = format_display_proposal(recommendation)
+        elif period_recommendation_requested:
+            reply = period_recommendation(st.session_state.campaign)
+        elif copy_revision_requested:
+            _, reply = offer_copy_name_alternatives()
         elif copy_generation_requested:
             if st.session_state.pending_display_recommendation:
                 reply = (
@@ -450,12 +534,30 @@ with chat_col:
                 changed = ", ".join(labels[key] for key in actual_changed_keys)
                 if benefit_recommendation_requested:
                     reply = (
-                        f"다음 정보를 상태판에 반영했습니다: {changed}.\n\n"
+                        f"{changed} 내용을 기획안에 반영했어요.\n\n"
                         f"{benefit_recommendation(st.session_state.campaign)}"
+                    )
+                elif "product_name" in actual_changed_keys:
+                    product_name = st.session_state.campaign["product_name"]
+                    product_type = st.session_state.campaign.get("product_type") or "미정"
+                    type_label = "PPM 월정액" if product_type == "PPM" else product_type
+                    reply = (
+                        f"상품명은 **{product_name}**, 유형은 **{type_label}**으로 저장했어요. "
+                        f"{next_question(st.session_state.campaign)}"
+                    )
+                elif "audience_type" in actual_changed_keys:
+                    reply = (
+                        f"진행 방식은 **{st.session_state.campaign['audience_type']}**로 저장했어요. "
+                        f"{next_question(st.session_state.campaign)}"
+                    )
+                elif "benefit" in actual_changed_keys:
+                    reply = (
+                        f"혜택은 **{st.session_state.campaign['benefit']}**으로 저장했어요. "
+                        f"{next_question(st.session_state.campaign)}"
                     )
                 else:
                     reply = (
-                        f"다음 정보를 상태판에 반영했습니다: {changed}. "
+                        f"{changed} 내용을 기획안에 반영했어요. "
                         f"{next_question(st.session_state.campaign)}"
                     )
             else:
@@ -463,8 +565,8 @@ with chat_col:
                     reply = benefit_recommendation(st.session_state.campaign)
                 else:
                     reply = (
-                        "말씀하신 정보는 이미 상태판에 저장되어 있습니다. "
-                        "변경할 내용이나 다음으로 진행할 작업을 말씀해 주세요."
+                        "말씀하신 내용은 현재 기획안에 이미 반영되어 있어요. "
+                        f"{next_question(st.session_state.campaign)}"
                     )
         elif benefit_recommendation_requested:
             reply = benefit_recommendation(st.session_state.campaign)
@@ -477,7 +579,17 @@ with chat_col:
         elif affirmative_requested:
             reply = "좋아요. " + next_question(st.session_state.campaign)
         else:
-            reply = f"새로 확인된 필드가 없습니다. {next_question(st.session_state.campaign)}"
+            next_step = next_question(st.session_state.campaign)
+            if next_step.startswith("기본 기획 정보가 준비되었습니다"):
+                reply = (
+                    "현재 기획 내용은 그대로 유지하고 있어요. "
+                    "수정할 항목이나 원하는 작업을 조금 더 알려주세요."
+                )
+            else:
+                reply = (
+                    "말씀하신 내용은 확인했어요. 현재 기획 내용은 그대로 유지하고, "
+                    f"다음 항목을 이어서 확인할게요. {next_step}"
+                )
         st.session_state.messages.append({"role": "assistant", "content": reply})
         save()
         st.rerun()
@@ -553,13 +665,31 @@ with state_col:
             }[value],
             help="대화에서 자동 분류되며 필요한 경우 바로잡을 수 있습니다.",
         )
-    product_label = (
-        "콘텐츠명" if product_type == "PPV"
-        else "월정액 상품명" if product_type == "PPM"
-        else "상품명"
-    )
     with product_col:
-        product = st.text_input(product_label, value=c["product_name"])
+        if product_type == "PPM":
+            ppm_product_options = [""] + KNOWN_PPM_PRODUCTS + ["기타"]
+            current_product = c.get("product_name", "")
+            current_ppm_option = (
+                current_product
+                if current_product in KNOWN_PPM_PRODUCTS
+                else "기타" if current_product else ""
+            )
+            selected_ppm_product = st.selectbox(
+                "월정액 상품명",
+                ppm_product_options,
+                index=ppm_product_options.index(current_ppm_option),
+                format_func=lambda value: value or "선택",
+            )
+            if selected_ppm_product == "기타":
+                product = st.text_input(
+                    "상품명 직접 입력",
+                    value=current_product if current_product not in KNOWN_PPM_PRODUCTS else "",
+                )
+            else:
+                product = selected_ppm_product
+        else:
+            product_label = "콘텐츠명" if product_type == "PPV" else "상품명"
+            product = st.text_input(product_label, value=c["product_name"])
     with product_detail_col:
         if product_type == "PPV":
             genre_options = ["", "영화", "TV 방송", "애니메이션", "키즈", "기타"]
@@ -572,22 +702,8 @@ with state_col:
                 format_func=lambda value: value or "선택",
             )
         elif product_type == "PPM":
-            ppm_options = ["월정액", "B tv+", "방송 월정액", "기타"]
-            current_category = c.get("product_category", "월정액")
-            normalized_product = product.lower().replace(" ", "")
-            if "btv+" in normalized_product and current_category == "월정액":
-                current_category = "B tv+"
-            elif (
-                any(name in product for name in ("CJ ENM", "JTBC", "지상파", "TV조선", "채널A", "MBN"))
-                and current_category == "월정액"
-            ):
-                current_category = "방송 월정액"
-            product_category = st.selectbox(
-                "상품 구분",
-                ppm_options,
-                index=ppm_options.index(current_category)
-                if current_category in ppm_options else 0,
-            )
+            product_category = "B tv+" if product == "B tv+" else "방송 월정액"
+            st.text_input("상품군", value=product_category, disabled=True)
         else:
             st.text_input("유형 상세", value="상품 유형 선택 후 표시", disabled=True)
             product_category = ""

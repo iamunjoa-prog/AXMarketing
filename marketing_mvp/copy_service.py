@@ -12,22 +12,43 @@ def _object_particle(text: str) -> str:
     return "을"
 
 
+def _normalized_subscription_benefit(benefit: str) -> str:
+    normalized = re.sub(r"신규\s*가입\s*시?", "신규 가입 시 ", benefit)
+    normalized = re.sub(r"첫\s*달", "첫 달", normalized)
+    return " ".join(normalized.split())
+
+
+def copy_name_alternatives(campaign: dict[str, Any]) -> list[str]:
+    product = campaign.get("product_name") or "이 상품"
+    benefit = campaign.get("benefit") or ""
+    if campaign.get("product_type") == "PPM":
+        if "첫" in benefit and "50%" in benefit.replace(" ", ""):
+            return [
+                f"{product} 첫 달 반값",
+                f"첫 달은 반값, {product}",
+                f"{product} 50%로 시작",
+            ]
+        return [
+            f"{product} 월정액 혜택",
+            f"지금 시작하는 {product}",
+            f"{product} 가입 프로모션",
+        ]
+    return [
+        f"{product} 구매 혜택",
+        f"{product} 스페셜 프로모션",
+        f"지금 만나는 {product}",
+    ]
+
+
 def generate_copy(campaign: dict[str, Any]) -> dict[str, str]:
     product = campaign.get("product_name") or "이 상품"
     benefit = campaign.get("benefit") or "특별 혜택"
     work_facts = (campaign.get("work_facts") or "").strip()
     product_type = campaign.get("product_type") or ""
     if product_type == "PPM" and benefit != "혜택 없음":
-        normalized_benefit = re.sub(
-            r"신규\s*가입\s*시", "신규 가입 시", benefit
-        )
-        normalized_benefit = re.sub(r"첫\s*달", "첫 달", normalized_benefit)
+        normalized_benefit = _normalized_subscription_benefit(benefit)
         copy = f"{product} {normalized_benefit}".strip().rstrip("!！") + "!"
-        event_name = (
-            f"{product} 신규가입 혜택"
-            if "신규" in benefit or "첫" in benefit
-            else f"{product} 월정액 혜택"
-        )
+        event_name = copy_name_alternatives(campaign)[0]
         return {"event_name": event_name, "copy": copy}
 
     if benefit == "혜택 없음" and work_facts:
