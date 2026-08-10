@@ -64,6 +64,121 @@ def _iso(year: int, month: int, day: int) -> str:
         return ""
 
 
+def extract_reward_scheme(text: str) -> dict[str, Any]:
+    """Normalize common marketing rewards while preserving the user's wording."""
+    raw_text = text.strip().rstrip(".。")
+    raw_text = re.sub(
+        r"\s*(?:>>|→)?\s*(?:이게|이것이|이 내용이)?\s*"
+        r"(?:혜택|리워드)(?:이야|야|이에요|예요|입니다)?\s*$",
+        "",
+        raw_text,
+    ).strip()
+    compact = re.sub(r"\s+", "", text).lower()
+    if compact in {
+        "혜택있어", "혜택있어요", "혜택있음", "혜택있다",
+        "리워드있어", "리워드있어요", "리워드있음", "리워드있다",
+    }:
+        return {}
+
+    has_reward_signal = re.search(
+        r"쿠폰|할인|포인트|B\s*캐시|캐시\s*백|포인트\s*백|"
+        r"추첨|경품|증정|지급|적립|무료",
+        raw_text,
+        re.IGNORECASE,
+    )
+    if not raw_text or not has_reward_signal:
+        return {}
+
+    if "추첨" in raw_text:
+        reward_type = "RAFFLE"
+    elif "쿠폰" in raw_text:
+        reward_type = "COUPON"
+    elif re.search(r"포인트|B\s*캐시|캐시\s*백|포인트\s*백", raw_text, re.IGNORECASE):
+        reward_type = "POINTBACK"
+    elif "할인" in raw_text or "무료" in raw_text:
+        reward_type = "DISCOUNT"
+    else:
+        reward_type = "GIFT"
+
+    if re.search(r"신규\s*가입|가입", raw_text):
+        trigger = "SUBSCRIPTION"
+    elif "구매" in raw_text:
+        trigger = "PURCHASE"
+    elif re.search(r"참여|응모", raw_text):
+        trigger = "PARTICIPATION"
+    elif "시청" in raw_text:
+        trigger = "WATCH"
+    else:
+        trigger = "UNSPECIFIED"
+
+    coupon_before_purchase = re.search(
+        r"쿠폰.{0,12}(?:받고|발급받아|적용(?:하고|해)).{0,12}구매",
+        raw_text,
+    )
+    if coupon_before_purchase:
+        timing = "BEFORE_PURCHASE"
+    elif reward_type == "DISCOUNT" and re.search(r"구매\s*시|가입|첫\s*달", raw_text):
+        timing = "INSTANT"
+    elif re.search(r"구매.{0,8}(?:하면|후|고객|시)", raw_text):
+        timing = "AFTER_PURCHASE"
+    else:
+        timing = "UNSPECIFIED"
+
+    if reward_type == "RAFFLE" or "추첨" in raw_text:
+        distribution = "RAFFLE"
+    elif "선착순" in raw_text:
+        distribution = "FIRST_COME"
+    elif "전원" in raw_text or trigger != "UNSPECIFIED":
+        distribution = "ALL"
+    else:
+        distribution = "UNSPECIFIED"
+
+    value_match = re.search(
+        r"(\d[\d,.]*)(?:\s*)(%|원|P|포인트|B\s*캐시|캐시)",
+        raw_text,
+        re.IGNORECASE,
+    )
+    quantity_match = re.search(r"(\d[\d,]*)\s*(명|대|개)", raw_text)
+    reward_name = ""
+    if reward_type == "COUPON":
+        name_match = re.search(
+            r"((?:VOD|B\s*tv|영화|콘텐츠)?\s*(?:할인\s*)?쿠폰)",
+            raw_text,
+            re.IGNORECASE,
+        )
+        reward_name = name_match.group(1).strip() if name_match else "할인 쿠폰"
+    elif reward_type == "POINTBACK":
+        name_match = re.search(r"B\s*캐시|캐시\s*백|포인트\s*백|포인트", raw_text, re.IGNORECASE)
+        reward_name = name_match.group(0).strip() if name_match else "포인트백"
+    elif reward_type == "RAFFLE":
+        name_match = re.search(
+            r"추첨(?:을)?\s*(?:통해|해서|하여)?\s*([^,，]{1,30}?)\s*"
+            r"(?:\d[\d,]*\s*(?:명|대|개))?\s*(?:증정|지급|제공)",
+            raw_text,
+        )
+        reward_name = name_match.group(1).strip() if name_match else "경품"
+    elif reward_type == "GIFT":
+        name_match = re.search(
+            r"([^,，]{1,30}?)\s*(?:\d[\d,]*\s*(?:명|대|개))?\s*"
+            r"(?:증정|지급|제공)",
+            raw_text,
+        )
+        reward_name = name_match.group(1).strip() if name_match else "증정 혜택"
+
+    return {
+        "raw_text": raw_text,
+        "reward_type": reward_type,
+        "trigger": trigger,
+        "timing": timing,
+        "distribution": distribution,
+        "value": value_match.group(1) if value_match else "",
+        "unit": value_match.group(2).replace(" ", "") if value_match else "",
+        "reward_name": reward_name,
+        "quantity": quantity_match.group(1) if quantity_match else "",
+        "quantity_unit": quantity_match.group(2) if quantity_match else "",
+    }
+
+
 def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
     """Extract only explicitly supplied values; never overwrite with guesses."""
     today = today or date.today()
@@ -80,21 +195,51 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
     if re.search(r"(?:혜택|리워드|보상)(?:은|는|이|가)?\s*(?:없음|없어|없다|없습니다)", text):
         result["benefit"] = "혜택 없음"
         result["benefit_pending"] = False
+    reward_scheme = extract_reward_scheme(text)
+    if reward_scheme:
+        result["benefit"] = reward_scheme["raw_text"]
+        result["reward_scheme"] = reward_scheme
+        result["benefit_pending"] = False
+    explicit_benefit = re.match(
+        r"^\s*(.+?)\s*(?:>>|→)?\s*(?:이게|이것이|이 내용이)?\s*"
+        r"(?:혜택|리워드)(?:이야|야|이에요|예요|입니다)?\s*$",
+        text,
+    )
+    if explicit_benefit:
+        benefit_value = explicit_benefit.group(1).strip().rstrip(".。")
+        if benefit_value:
+            result["benefit"] = benefit_value
+            result["benefit_pending"] = False
     is_raffle_benefit = (
         "추첨" in text
         and re.search(r"(?:증정|경품|지급|제공)", text)
     )
-    if is_raffle_benefit:
+    if is_raffle_benefit and not result.get("benefit"):
         result["benefit"] = text.strip().rstrip(".。")
         result["benefit_pending"] = False
     purchase_match = re.search(r"(?:구매|참여|응모)", text)
     is_point_benefit = (
         purchase_match
-        and re.search(r"\d[\d,]*\s*(?:원|P|포인트)", text, re.IGNORECASE)
-        and re.search(r"(?:포인트|증정|지급|적립|백)", text, re.IGNORECASE)
+        and re.search(
+            r"\d[\d,]*(?:\.\d+)?\s*(?:%|원|P|포인트|B\s*캐시|캐시)",
+            text,
+            re.IGNORECASE,
+        )
+        and re.search(
+            r"(?:B\s*캐시|캐시|포인트|증정|지급|적립|캐시\s*백|백)",
+            text,
+            re.IGNORECASE,
+        )
     )
-    if is_point_benefit and not is_raffle_benefit:
-        result["benefit"] = text[purchase_match.start():].strip().rstrip(".。")
+    if is_point_benefit and not is_raffle_benefit and not result.get("benefit"):
+        benefit_value = text[purchase_match.start():].strip().rstrip(".。")
+        benefit_value = re.sub(
+            r"\s*(?:>>|→)?\s*(?:이게|이것이|이 내용이)?\s*"
+            r"(?:혜택|리워드)(?:이야|야|이에요|예요|입니다)?\s*$",
+            "",
+            benefit_value,
+        ).strip()
+        result["benefit"] = benefit_value
         result["benefit_pending"] = False
 
     is_subscription_discount = (
@@ -125,6 +270,11 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         or known_ppm_product
     )
     is_ppv = re.search(r"(?<![A-Za-z])PPV(?![A-Za-z])", text, re.IGNORECASE)
+    is_seasonal = re.search(
+        r"(?:시즈널|시즌(?:성|별)?|계절)\s*(?:프로모션|이벤트)?",
+        text,
+        re.IGNORECASE,
+    )
     if is_ppm:
         result["product_type"] = "PPM"
         result["product_category"] = "월정액"
@@ -149,6 +299,19 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
                     result["product_name"] = ppm_product_name
     elif is_ppv:
         result["product_type"] = "PPV"
+        if "영화" in text:
+            result["product_category"] = "영화"
+    elif is_seasonal:
+        result["product_type"] = "SEASONAL"
+        result["product_category"] = "시즈널"
+        seasonal_name = re.search(
+            r"(?:이벤트명|행사명|시즌\s*테마)\s*(?:은|는|:)?\s*([^,.。\n]+)",
+            text,
+        )
+        if seasonal_name:
+            event_name = seasonal_name.group(1).strip()
+            result["product_name"] = event_name
+            result["event_name"] = event_name
 
     capa = re.search(r"(?:목표\s*)?(?:capa|모수)\s*(?:는|은|:)?\s*([\d,.]+\s*(?:만|천)?)", text, re.IGNORECASE)
     if capa:
@@ -167,12 +330,17 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         for pattern in benefit_patterns:
             benefit = re.search(pattern, text, re.IGNORECASE)
             if benefit:
-                result["benefit"] = re.sub(
+                benefit_value = re.sub(
                     r"^(?:혜택|리워드)\s*(?:은|는|:)?\s*",
                     "",
                     benefit.group(1),
                 ).strip()
-                break
+                if benefit_value not in {
+                    "이야", "야", "이에요", "예요", "입니다", "이라고", "라고",
+                    "있어", "있어요", "있음", "있다", "있습니다",
+                }:
+                    result["benefit"] = benefit_value
+                    break
 
     full_range = re.search(
         r"(?:(\d{4})년?\s*)?(\d{1,2})월\s*(\d{1,2})일?\s*(?:부터|~|-)\s*"
@@ -182,6 +350,11 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
     slash_range = re.search(
         r"(?:(\d{4})[./-])?(\d{1,2})[./-](\d{1,2})\s*(?:부터|~)\s*"
         r"(?:(\d{4})[./-])?(\d{1,2})[./-](\d{1,2})",
+        text,
+    )
+    partial_slash_start = re.search(
+        r"(?<!\d)(?:(\d{4})[./-])?(\d{1,2})[./-](\d{1,2})"
+        r"\s*(?:부터|~|-)\s*$",
         text,
     )
     match = full_range or slash_range
@@ -200,6 +373,12 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         result["schedule_pending"] = False
         if has_schedule_flexibility:
             result["schedule_note"] = text.strip().rstrip(".。")
+    elif partial_slash_start:
+        year = int(partial_slash_start.group(1) or today.year)
+        month = int(partial_slash_start.group(2))
+        day = int(partial_slash_start.group(3))
+        result["start_date"] = _iso(year, month, day)
+        result["schedule_pending"] = False
     elif has_schedule_flexibility:
         result["schedule_note"] = text.strip().rstrip(".。")
 
@@ -219,7 +398,8 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
             movie_title = re.search(pattern, text, re.IGNORECASE)
             if movie_title:
                 value = movie_title.group(1).strip()
-                if value:
+                normalized_value = value.upper().replace(" ", "")
+                if value and normalized_value not in {"PPV", "프로모션", "이벤트"}:
                     result["product_name"] = value
                     result["product_type"] = "PPV"
                     result["product_category"] = "영화"
@@ -241,9 +421,27 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
                 value = product.group(1).strip()
                 value = re.sub(r"^(?:이번|신규)\s+", "", value)
                 normalized_value = value.upper().replace(" ", "")
+                looks_like_schedule_question = (
+                    bool(re.search(r"\d{1,2}\s*월|\d{1,2}[./-]\d{1,2}", value))
+                    or any(
+                        word in value
+                        for word in (
+                            "일정", "기간", "타임", "비는", "빈 자리", "가능",
+                            "언제", "구좌", "메인", "하고싶",
+                        )
+                    )
+                )
+                starts_with_ack = value.lower().startswith(
+                    ("응 ", "네 ", "예 ", "좋아 ", "아니 ")
+                )
                 if (
                     value in {"다른", "새", "새로운", "신규"}
-                    or normalized_value in {"MASS", "TARGET", "PPV", "PPM"}
+                    or normalized_value in {
+                        "MASS", "TARGET", "PPV", "PPM", "SEASONAL",
+                        "시즈널", "시즌", "영화PPV", "월정액PPM",
+                    }
+                    or looks_like_schedule_question
+                    or starts_with_ack
                 ):
                     continue
                 result["product_name"] = value

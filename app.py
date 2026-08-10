@@ -40,6 +40,7 @@ SLOT_CONTRACTS = knowledge_contract_module.SLOT_CONTRACTS
 recommendation_to_assets = knowledge_contract_module.recommendation_to_assets
 unresolved_issues = knowledge_contract_module.unresolved_issues
 extract_fields = extractor_module.extract_fields
+extract_reward_scheme = extractor_module.extract_reward_scheme
 extract_reference_urls = extractor_module.extract_reference_urls
 normalize_product_name = extractor_module.normalize_product_name
 KNOWN_PPM_PRODUCTS = extractor_module.KNOWN_PPM_PRODUCTS
@@ -56,11 +57,13 @@ validate_basic_info = models_module.validate_basic_info
 validate_planning_info = models_module.validate_planning_info
 validate_for_confirmation = models_module.validate_for_confirmation
 benefit_recommendation = workflow_module.benefit_recommendation
+is_benefit_presence_response = workflow_module.is_benefit_presence_response
 is_benefit_recommendation_request = workflow_module.is_benefit_recommendation_request
 extract_copy_option_choice = workflow_module.extract_copy_option_choice
 is_copy_generation_request = workflow_module.is_copy_generation_request
 is_copy_revision_request = workflow_module.is_copy_revision_request
 is_display_plan_request = workflow_module.is_display_plan_request
+is_contextual_display_plan_request = workflow_module.is_contextual_display_plan_request
 is_period_recommendation_request = workflow_module.is_period_recommendation_request
 period_recommendation = workflow_module.period_recommendation
 is_affirmative_response = workflow_module.is_affirmative_response
@@ -68,6 +71,10 @@ is_campaign_reset_request = workflow_module.is_campaign_reset_request
 is_contextual_no_benefit_response = workflow_module.is_contextual_no_benefit_response
 next_question = workflow_module.next_question
 to_admin_payload = workflow_module.to_admin_payload
+ADMIN_BASE_URL = os.getenv(
+    "ADMIN_BASE_URL",
+    "https://btvcuration.github.io/campaign/",
+)
 
 
 st.set_page_config(page_title="AX 마케팅 매니저", page_icon="🔷", layout="wide")
@@ -212,6 +219,8 @@ if "pending_display_recommendation" not in st.session_state:
     st.session_state.pending_display_recommendation = None
 if "pending_copy_names" not in st.session_state:
     st.session_state.pending_copy_names = []
+if "redirect_to_admin" not in st.session_state:
+    st.session_state.redirect_to_admin = False
 
 # Older saved drafts could have been marked as basic-confirmed before event
 # copy became a required field. Reopen those campaigns as drafts.
@@ -234,6 +243,7 @@ def reset_campaign_state() -> None:
     st.session_state.pending_copy_names = []
     st.session_state.admin_payload = None
     st.session_state.capa_result = None
+    st.session_state.redirect_to_admin = False
     st.session_state["selected_banner_types"] = []
 
 
@@ -361,8 +371,31 @@ def confirm_display_plan() -> tuple[bool, str]:
     st.session_state.pending_display_recommendation = None
     st.session_state.pending_copy_names = []
     st.session_state.admin_payload = None
+    st.session_state.redirect_to_admin = True
     save()
     return True, format_banner_copy_result(assets)
+
+
+if st.session_state.redirect_to_admin:
+    st.session_state.redirect_to_admin = False
+    target_url_json = json.dumps(ADMIN_BASE_URL)
+    st.info("영역별 카피 적용이 완료되었습니다. 캠페인 제작 화면으로 이동합니다.")
+    st.html(
+        f"""
+        <script>
+          const targetUrl = {target_url_json};
+          window.location.replace(targetUrl);
+        </script>
+        """,
+        unsafe_allow_javascript=True,
+    )
+    st.link_button(
+        "캠페인 제작 화면으로 이동",
+        ADMIN_BASE_URL,
+        type="primary",
+        width="stretch",
+    )
+    st.stop()
 
 
 st.title("🔷 AX 마케팅 매니저")
@@ -406,6 +439,7 @@ with chat_col:
                 dict.fromkeys(existing_urls + reference_urls)
             )
         benefit_recommendation_requested = is_benefit_recommendation_request(prompt)
+        benefit_presence_only = is_benefit_presence_response(prompt)
         affirmative_requested = is_affirmative_response(prompt)
         period_recommendation_requested = is_period_recommendation_request(
             prompt,
@@ -421,18 +455,18 @@ with chat_col:
             and st.session_state.pending_display_recommendation is not None
         )
         copy_generation_requested = is_copy_generation_request(prompt)
-        display_recommendation_requested = (
-            is_display_plan_request(prompt)
-            or (
-                affirmative_requested
-                and ("전시 영역" in previous_assistant or "추천 배너" in previous_assistant)
-                and ("제안" in previous_assistant or "할까요" in previous_assistant)
-            )
+        display_recommendation_requested = is_contextual_display_plan_request(
+            prompt,
+            previous_assistant,
         )
         extracted = extract_fields(prompt)
         if is_contextual_no_benefit_response(prompt, previous_assistant):
             extracted["benefit"] = "혜택 없음"
             extracted["benefit_pending"] = False
+        if benefit_presence_only:
+            extracted.pop("benefit", None)
+            extracted.pop("reward_scheme", None)
+            extracted.pop("benefit_pending", None)
         if benefit_recommendation_requested:
             # A recommendation question can contain confirmed fields such as
             # MASS/TARGET. Keep those fields, but do not mistake the question
@@ -463,6 +497,11 @@ with chat_col:
                 recommendation = recommend_home_display(campaign)
                 st.session_state.pending_display_recommendation = recommendation
                 reply = format_display_proposal(recommendation)
+        elif benefit_presence_only:
+            reply = (
+                "좋아요. 어떤 혜택인가요? 할인, 쿠폰, 포인트백, 추첨 경품 중 "
+                "편하게 말씀해 주세요."
+            )
         elif period_recommendation_requested:
             reply = period_recommendation(st.session_state.campaign)
         elif copy_revision_requested:
@@ -498,6 +537,7 @@ with chat_col:
                 "audience_type": "방식", "benefit": "혜택", "target_capa": "목표 Capa",
                 "schedule_pending": "일정 미정 상태",
                 "benefit_pending": "혜택 미정 상태",
+                "reward_scheme": "혜택 구조",
                 "schedule_note": "일정 메모",
             }
             changed_keys = [
@@ -520,6 +560,8 @@ with chat_col:
                 if actual_changed_keys:
                     if start_value and end_value:
                         reply = f"일정을 {start_value}부터 {end_value}까지로 저장했습니다."
+                    elif start_value:
+                        reply = f"시작일을 {start_value}로 저장했습니다."
                     else:
                         reply = "일정을 미정 상태로 저장했습니다."
                     if schedule_note_value:
@@ -767,6 +809,27 @@ with state_col:
                 placeholder="예: 신규 가입 시 첫 달 50% 할인",
             )
 
+    reward_scheme = c.get("reward_scheme") or {}
+    if reward_scheme:
+        reward_type_labels = {
+            "DISCOUNT": "즉시 할인",
+            "COUPON": "할인 쿠폰",
+            "POINTBACK": "포인트·캐시백",
+            "RAFFLE": "추첨 경품",
+            "GIFT": "일반 증정",
+        }
+        timing_labels = {
+            "BEFORE_PURCHASE": "구매 전",
+            "INSTANT": "즉시 적용",
+            "AFTER_PURCHASE": "구매 후",
+            "UNSPECIFIED": "시점 미정",
+        }
+        st.caption(
+            "리워드 구조 · "
+            f"{reward_type_labels.get(reward_scheme.get('reward_type'), '기타')} · "
+            f"{timing_labels.get(reward_scheme.get('timing'), '시점 미정')}"
+        )
+
     copy_ready = bool(c.get("assets"))
     if copy_ready:
         st.caption("확정 카피")
@@ -842,6 +905,7 @@ with state_col:
         "audience_type": audience,
         "benefit": "" if benefit_pending else benefit,
         "benefit_pending": benefit_pending,
+        "reward_scheme": {} if benefit_pending else extract_reward_scheme(benefit),
         "target_capa": (target_capa or None) if audience == "TARGET" else None,
         "event_name": event_name,
         "copy": copy_text,
@@ -1173,11 +1237,7 @@ else:
             width="stretch",
         )
     with admin_col:
-        admin_base_url = os.getenv(
-            "ADMIN_BASE_URL",
-            "https://btvcuration.github.io/campaign/",
-        )
-        st.link_button("B tv 어드민 이동", admin_base_url, width="stretch")
+        st.link_button("B tv 어드민 이동", ADMIN_BASE_URL, width="stretch")
 if st.session_state.capa_result:
     result = st.session_state.capa_result
     if result["is_possible"]:

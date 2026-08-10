@@ -17,6 +17,7 @@ def empty_campaign() -> dict[str, Any]:
         "audience_type": "",
         "benefit": "",
         "benefit_pending": False,
+        "reward_scheme": {},
         "target_capa": None,
         "available_capa": None,
         "event_name": "",
@@ -63,9 +64,10 @@ def validate_planning_info(campaign: dict[str, Any]) -> list[str]:
         "product_type": "PPV/PPM",
         "product_name": "상품명",
         "audience_type": "MASS/TARGET",
-        "benefit": "혜택",
     }
     missing = [label for key, label in labels.items() if not campaign.get(key)]
+    if not campaign.get("benefit") and not campaign.get("benefit_pending"):
+        missing.append("혜택")
     if not campaign.get("schedule_pending"):
         if not campaign.get("start_date"):
             missing.append("시작일")

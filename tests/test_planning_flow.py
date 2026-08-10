@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import unittest
 
-from marketing_mvp.extractor import extract_fields, normalize_product_name
+from marketing_mvp.extractor import (
+    extract_fields,
+    extract_reward_scheme,
+    normalize_product_name,
+)
+from marketing_mvp.home_display_insights import recommend_home_display
 from marketing_mvp.models import validate_planning_info
 from marketing_mvp.workflow import (
     extract_copy_option_choice,
     is_affirmative_response,
+    is_benefit_presence_response,
     is_campaign_reset_request,
     is_copy_revision_request,
+    is_contextual_display_plan_request,
     is_display_plan_request,
     is_period_recommendation_request,
     next_question,
@@ -21,6 +28,14 @@ class PlanningFlowTests(unittest.TestCase):
         self.assertTrue(is_display_plan_request("전시 영역과 배너 추천해줘"))
         self.assertTrue(is_display_plan_request("기획안 만들어줘"))
         self.assertFalse(is_display_plan_request("카피 만들어줘"))
+
+    def test_display_plan_intent_uses_previous_question_context(self) -> None:
+        previous = "다음으로 전시 영역과 추천 배너를 제안해드릴까요?"
+        self.assertTrue(is_contextual_display_plan_request("응", previous))
+        self.assertTrue(is_contextual_display_plan_request("추천해줄래", previous))
+        self.assertFalse(
+            is_contextual_display_plan_request("추천해줄래", "혜택이 정해졌나요?")
+        )
 
     def test_confirmation_language_is_detected(self) -> None:
         self.assertTrue(is_affirmative_response("응 이대로 확정해줘"))
@@ -93,6 +108,72 @@ class PlanningFlowTests(unittest.TestCase):
             "악마는 프라다를 입는다 2",
         )
 
+    def test_partial_schedule_saves_start_and_requests_end_date(self) -> None:
+        extracted = extract_fields("8/21~", today=__import__("datetime").date(2026, 8, 10))
+        self.assertEqual(extracted["start_date"], "2026-08-21")
+        self.assertNotIn("end_date", extracted)
+        question = next_question({
+            "product_name": "악마는 프라다를 입는다 2",
+            "product_type": "PPV",
+            "audience_type": "MASS",
+            "start_date": extracted["start_date"],
+        })
+        self.assertEqual(question, "종료일은 언제인가요?")
+
+    def test_reward_schemes_are_normalized(self) -> None:
+        cases = [
+            ("구매하면 포인트백", "POINTBACK", "AFTER_PURCHASE", "ALL"),
+            ("구매하면 VOD 할인 쿠폰 증정", "COUPON", "AFTER_PURCHASE", "ALL"),
+            ("VOD 할인 쿠폰 받고 구매", "COUPON", "BEFORE_PURCHASE", "ALL"),
+            ("구매하면 추첨 통해 경품 증정", "RAFFLE", "AFTER_PURCHASE", "RAFFLE"),
+            ("구매 시 30% 할인", "DISCOUNT", "INSTANT", "ALL"),
+        ]
+        for text, reward_type, timing, distribution in cases:
+            with self.subTest(text=text):
+                reward = extract_reward_scheme(text)
+                self.assertEqual(reward["reward_type"], reward_type)
+                self.assertEqual(reward["timing"], timing)
+                self.assertEqual(reward["distribution"], distribution)
+                self.assertEqual(extract_fields(text)["benefit"], text)
+
+    def test_reward_timing_changes_recommended_userflow(self) -> None:
+        base_campaign = {
+            "product_name": "테스트 영화",
+            "product_type": "PPV",
+            "audience_type": "MASS",
+        }
+        before = dict(base_campaign)
+        before.update(extract_fields("VOD 할인 쿠폰 받고 구매"))
+        self.assertIn(
+            "쿠폰 발급 → 쿠폰 적용 → 구매",
+            recommend_home_display(before)["flow"],
+        )
+        after = dict(base_campaign)
+        after.update(extract_fields("구매하면 VOD 할인 쿠폰 증정"))
+        self.assertIn("구매 → 쿠폰 지급", recommend_home_display(after)["flow"])
+        pointback = dict(base_campaign)
+        pointback.update(extract_fields("구매하면 포인트백"))
+        self.assertIn(
+            "구매 → 포인트·캐시 적립",
+            recommend_home_display(pointback)["flow"],
+        )
+
+    def test_benefit_presence_is_not_saved_as_benefit(self) -> None:
+        self.assertTrue(is_benefit_presence_response("혜택 있어"))
+        self.assertNotIn("benefit", extract_fields("혜택 있어"))
+
+    def test_b_cashback_is_extracted_as_benefit(self) -> None:
+        expected = "구매하면 30% B캐시 백"
+        self.assertEqual(extract_fields(expected)["benefit"], expected)
+        clarified = extract_fields(f"{expected} >> 이게 혜택이야")
+        self.assertEqual(clarified["benefit"], expected)
+
+        fixed_points = extract_fields("구매하면 B캐시 1000P")
+        self.assertEqual(fixed_points["benefit"], "구매하면 B캐시 1000P")
+        self.assertEqual(fixed_points["reward_scheme"]["reward_type"], "POINTBACK")
+        self.assertEqual(fixed_points["reward_scheme"]["value"], "1000")
+        self.assertEqual(fixed_points["reward_scheme"]["unit"], "P")
+
     def test_complete_schedule_moves_to_benefit_question(self) -> None:
         question = next_question(
             {
@@ -116,6 +197,20 @@ class PlanningFlowTests(unittest.TestCase):
             "schedule_pending": False,
             "event_name": "",
             "copy": "",
+            "has_coupon": "N",
+        }
+        self.assertEqual(validate_planning_info(campaign), [])
+
+    def test_planning_validation_accepts_pending_benefit(self) -> None:
+        campaign = {
+            "product_name": "CJ ENM",
+            "product_type": "PPM",
+            "audience_type": "MASS",
+            "benefit": "",
+            "benefit_pending": True,
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-31",
+            "schedule_pending": False,
             "has_coupon": "N",
         }
         self.assertEqual(validate_planning_info(campaign), [])

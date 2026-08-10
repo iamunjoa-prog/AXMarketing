@@ -15,13 +15,16 @@ def next_question(campaign: dict[str, Any]) -> str:
         return "상품 유형은 단건 콘텐츠 PPV와 월정액 PPM 중 무엇인가요?"
     if not campaign.get("audience_type"):
         return "진행 방식은 MASS와 TARGET 중 무엇인가요? 아직 미정이면 다른 기획부터 진행할 수 있습니다."
-    if (
-        not campaign.get("start_date")
-        and not campaign.get("schedule_pending")
-    ):
-        return "진행 기간이 정해졌나요? 아직 미정이라면 기간을 추천받아 보실래요?"
+    if not campaign.get("schedule_pending"):
+        if campaign.get("start_date") and not campaign.get("end_date"):
+            return "종료일은 언제인가요?"
+        if not campaign.get("start_date") or not campaign.get("end_date"):
+            return "진행 기간이 정해졌나요? 아직 미정이라면 기간을 추천받아 보실래요?"
     if not campaign.get("benefit") and not campaign.get("benefit_pending"):
-        return "혜택이 정해졌나요? 미정이면 ‘리워드 미정’이라고 말씀해 주세요."
+        return (
+            "어떤 혜택인가요? 할인, 쿠폰, 포인트백, 추첨 경품 중 "
+            "편하게 말씀해 주세요. 미정이면 ‘리워드 미정’이라고 말씀해 주세요."
+        )
     if campaign.get("audience_type") == "TARGET" and not campaign.get("target_capa"):
         return "목표 Capa는 몇 명인가요?"
     if not campaign.get("exposure_areas"):
@@ -84,6 +87,14 @@ def is_campaign_reset_request(text: str) -> bool:
     return starts_another and any(
         word in normalized for word in ("기획", "시작", "진행", "할게", "해줘")
     )
+
+
+def is_benefit_presence_response(text: str) -> bool:
+    normalized = text.strip().lower().replace(" ", "")
+    return normalized in {
+        "혜택있어", "혜택있어요", "혜택있음", "혜택있다",
+        "리워드있어", "리워드있어요", "리워드있음", "리워드있다",
+    }
 
 
 def is_contextual_no_benefit_response(text: str, previous_assistant: str) -> bool:
@@ -200,6 +211,25 @@ def is_display_plan_request(text: str) -> bool:
         for word in ("추천", "제안", "만들", "구성", "정해", "진행")
     )
     return has_display_word and has_action_word
+
+
+def is_contextual_display_plan_request(
+    text: str,
+    previous_assistant: str = "",
+) -> bool:
+    if is_display_plan_request(text):
+        return True
+    previous_context = previous_assistant.lower().replace(" ", "")
+    offered_display_plan = (
+        any(word in previous_context for word in ("전시영역", "추천배너", "전시안"))
+        and any(word in previous_context for word in ("제안", "추천", "할까요"))
+    )
+    normalized = text.lower().replace(" ", "")
+    accepted_or_requested = is_affirmative_response(text) or any(
+        word in normalized
+        for word in ("추천해줘", "추천해줄래", "제안해줘", "진행해줘")
+    )
+    return offered_display_plan and accepted_or_requested
 
 
 def to_admin_payload(campaign: dict[str, Any]) -> dict[str, Any]:

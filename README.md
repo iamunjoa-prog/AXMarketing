@@ -41,7 +41,8 @@ tests/                  핵심 로직 테스트
 
 - Google Sheets: `marketing_mvp/capa_service.py`의 `CapaService` 규격을 유지한 채 `GoogleSheetsCapaService`를 추가합니다.
 - AI/LLM: `extractor.py`와 `copy_service.py`의 공개 함수 규격을 유지한 채 회사 승인 API 호출로 바꿉니다.
-- 어드민: 기본 연결 주소는 `https://btvcuration.github.io/campaign/`입니다. 전송 규격이 제공되지 않은 상태이므로 임의의 URL 파라미터를 만들지 않으며, 계약 검증을 통과한 JSON을 저장한 뒤 어드민으로 이동합니다. 주소 변경이 필요하면 환경변수 `ADMIN_BASE_URL`을 설정합니다.
+- 어드민: 전시안 확정과 영역별 카피 적용이 끝나면 기본 주소 `https://btvcuration.github.io/campaign/`으로 자동 이동합니다. 브라우저 정책으로 자동 이동이 제한되면 같은 화면에 수동 이동 버튼을 표시합니다. 주소 변경이 필요하면 환경변수 `ADMIN_BASE_URL`을 설정합니다.
+- 데이터 전달: 캠페인 페이지는 현재 동일 페이지의 `RECEIVE_AI_DATA` 이벤트만 수신하므로, 다른 도메인인 Streamlit 앱에서 자동 이동할 때 생성 데이터까지 직접 주입되지는 않습니다. 자동 채우기를 위해서는 캠페인 페이지에 `postMessage` 또는 서버 기반 수신 브리지를 추가해야 합니다.
 
 ## B tv 연동 계약
 
