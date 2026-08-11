@@ -25,6 +25,7 @@ def empty_campaign() -> dict[str, Any]:
         "reference_urls": [],
         "exposure_areas": [],
         "target_condition": "",
+        "exposure_method": "",
         "has_coupon": "N",
         "coupon_benefit": "",
         "assignee": "",

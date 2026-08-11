@@ -165,17 +165,58 @@ def extract_reward_scheme(text: str) -> dict[str, Any]:
         )
         reward_name = name_match.group(1).strip() if name_match else "증정 혜택"
 
+    value = value_match.group(1) if value_match else ""
+    unit = value_match.group(2).replace(" ", "") if value_match else ""
+    quantity = quantity_match.group(1) if quantity_match else ""
+    quantity_unit = quantity_match.group(2) if quantity_match else ""
+    audience = ""
+    if re.search(r"타겟\s*고객\s*대상|대상\s*고객", raw_text):
+        audience = "타겟 고객"
+    elif re.search(r"신규\s*(?:가입\s*)?고객", raw_text):
+        audience = "신규 고객"
+    elif re.search(r"구매\s*고객", raw_text):
+        audience = "구매 고객"
+
+    channel_match = re.search(r"팝업|배너|문자|SMS|푸시|알림톡", raw_text, re.IGNORECASE)
+    channel = channel_match.group(0).upper() if channel_match else ""
+    if channel == "SMS":
+        channel = "문자"
+
+    if reward_type == "COUPON":
+        normalized_text = f"{value}{unit} " if value else ""
+        normalized_text += f"{reward_name} 증정"
+    elif reward_type == "POINTBACK":
+        if unit == "%":
+            normalized_text = f"{value}% {reward_name} 지급"
+        elif value:
+            normalized_text = f"{reward_name} {value}{unit} 지급"
+        else:
+            normalized_text = f"{reward_name} 지급"
+    elif reward_type == "RAFFLE":
+        prize = reward_name or "경품"
+        count = f" {quantity}{quantity_unit}" if quantity else ""
+        normalized_text = f"추첨으로 {prize}{count} 증정"
+    elif reward_type == "GIFT":
+        normalized_text = f"{reward_name or '혜택'} 증정"
+    else:
+        normalized_text = re.sub(
+            r"\s*(?:하려고|할게|할거야|진행하려고)\s*$", "", raw_text
+        ).strip()
+
     return {
         "raw_text": raw_text,
+        "normalized_text": normalized_text,
         "reward_type": reward_type,
         "trigger": trigger,
         "timing": timing,
         "distribution": distribution,
-        "value": value_match.group(1) if value_match else "",
-        "unit": value_match.group(2).replace(" ", "") if value_match else "",
+        "value": value,
+        "unit": unit,
         "reward_name": reward_name,
-        "quantity": quantity_match.group(1) if quantity_match else "",
-        "quantity_unit": quantity_match.group(2) if quantity_match else "",
+        "quantity": quantity,
+        "quantity_unit": quantity_unit,
+        "audience": audience,
+        "channel": channel,
     }
 
 
@@ -197,9 +238,13 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         result["benefit_pending"] = False
     reward_scheme = extract_reward_scheme(text)
     if reward_scheme:
-        result["benefit"] = reward_scheme["raw_text"]
+        result["benefit"] = reward_scheme["normalized_text"]
         result["reward_scheme"] = reward_scheme
         result["benefit_pending"] = False
+        if reward_scheme.get("audience"):
+            result["target_condition"] = reward_scheme["audience"]
+        if reward_scheme.get("channel"):
+            result["exposure_method"] = reward_scheme["channel"]
     explicit_benefit = re.match(
         r"^\s*(.+?)\s*(?:>>|→)?\s*(?:이게|이것이|이 내용이)?\s*"
         r"(?:혜택|리워드)(?:이야|야|이에요|예요|입니다)?\s*$",
@@ -208,7 +253,12 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
     if explicit_benefit:
         benefit_value = explicit_benefit.group(1).strip().rstrip(".。")
         if benefit_value:
-            result["benefit"] = benefit_value
+            explicit_scheme = extract_reward_scheme(benefit_value)
+            result["benefit"] = (
+                explicit_scheme["normalized_text"] if explicit_scheme else benefit_value
+            )
+            if explicit_scheme:
+                result["reward_scheme"] = explicit_scheme
             result["benefit_pending"] = False
     is_raffle_benefit = (
         "추첨" in text
@@ -264,6 +314,19 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         ),
         "",
     )
+    targeted_movie = re.search(
+        r"^\s*(.+?)\s+영화\s+미시청\s+고객\s+타겟(?:으로)?\s+"
+        r"영화\s+구매\s+(?:프로모션|이벤트)",
+        text,
+    )
+    if targeted_movie:
+        title = targeted_movie.group(1).strip()
+        result["product_name"] = title
+        result["product_type"] = "PPV"
+        result["product_category"] = "영화"
+        result["audience_type"] = "TARGET"
+        result["target_condition"] = f"{title} 영화 미시청 고객"
+
     is_ppm = (
         re.search(r"(?<![A-Za-z])PPM(?![A-Za-z])", text, re.IGNORECASE)
         or "월정액" in text
@@ -316,6 +379,12 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
     capa = re.search(r"(?:목표\s*)?(?:capa|모수)\s*(?:는|은|:)?\s*([\d,.]+\s*(?:만|천)?)", text, re.IGNORECASE)
     if capa:
         result["target_capa"] = _number(capa.group(1))
+    else:
+        bare_capa = re.fullmatch(
+            r"\s*([\d,.]+\s*(?:만|천)?)\s*명\s*", text, re.IGNORECASE
+        )
+        if bare_capa:
+            result["target_capa"] = _number(bare_capa.group(1))
 
     benefit_patterns = [
         r"((?:구매|참여|응모)(?:하면|할\s*때|한\s*고객|고객)?[^,.。\n]{0,40}?"

@@ -122,19 +122,19 @@ class PlanningFlowTests(unittest.TestCase):
 
     def test_reward_schemes_are_normalized(self) -> None:
         cases = [
-            ("구매하면 포인트백", "POINTBACK", "AFTER_PURCHASE", "ALL"),
-            ("구매하면 VOD 할인 쿠폰 증정", "COUPON", "AFTER_PURCHASE", "ALL"),
-            ("VOD 할인 쿠폰 받고 구매", "COUPON", "BEFORE_PURCHASE", "ALL"),
-            ("구매하면 추첨 통해 경품 증정", "RAFFLE", "AFTER_PURCHASE", "RAFFLE"),
-            ("구매 시 30% 할인", "DISCOUNT", "INSTANT", "ALL"),
+            ("구매하면 포인트백", "POINTBACK", "AFTER_PURCHASE", "ALL", "포인트백 지급"),
+            ("구매하면 VOD 할인 쿠폰 증정", "COUPON", "AFTER_PURCHASE", "ALL", "VOD 할인 쿠폰 증정"),
+            ("VOD 할인 쿠폰 받고 구매", "COUPON", "BEFORE_PURCHASE", "ALL", "VOD 할인 쿠폰 증정"),
+            ("구매하면 추첨 통해 경품 증정", "RAFFLE", "AFTER_PURCHASE", "RAFFLE", "추첨으로 경품 증정"),
+            ("구매 시 30% 할인", "DISCOUNT", "INSTANT", "ALL", "구매 시 30% 할인"),
         ]
-        for text, reward_type, timing, distribution in cases:
+        for text, reward_type, timing, distribution, normalized in cases:
             with self.subTest(text=text):
                 reward = extract_reward_scheme(text)
                 self.assertEqual(reward["reward_type"], reward_type)
                 self.assertEqual(reward["timing"], timing)
                 self.assertEqual(reward["distribution"], distribution)
-                self.assertEqual(extract_fields(text)["benefit"], text)
+                self.assertEqual(extract_fields(text)["benefit"], normalized)
 
     def test_reward_timing_changes_recommended_userflow(self) -> None:
         base_campaign = {
@@ -164,16 +164,34 @@ class PlanningFlowTests(unittest.TestCase):
 
     def test_b_cashback_is_extracted_as_benefit(self) -> None:
         expected = "구매하면 30% B캐시 백"
-        self.assertEqual(extract_fields(expected)["benefit"], expected)
+        self.assertEqual(extract_fields(expected)["benefit"], "30% B캐시 지급")
         clarified = extract_fields(f"{expected} >> 이게 혜택이야")
-        self.assertEqual(clarified["benefit"], expected)
+        self.assertEqual(clarified["benefit"], "30% B캐시 지급")
 
         fixed_points = extract_fields("구매하면 B캐시 1000P")
-        self.assertEqual(fixed_points["benefit"], "구매하면 B캐시 1000P")
+        self.assertEqual(fixed_points["benefit"], "B캐시 1000P 지급")
         self.assertEqual(fixed_points["reward_scheme"]["reward_type"], "POINTBACK")
         self.assertEqual(fixed_points["reward_scheme"]["value"], "1000")
         self.assertEqual(fixed_points["reward_scheme"]["unit"], "P")
 
+    def test_target_campaign_sentence_is_split_into_fields(self) -> None:
+        extracted = extract_fields(
+            "군체 영화 미시청 고객 타겟으로 영화 구매 프로모션"
+        )
+        self.assertEqual(extracted["product_name"], "군체")
+        self.assertEqual(extracted["product_type"], "PPV")
+        self.assertEqual(extracted["audience_type"], "TARGET")
+        self.assertEqual(extracted["target_condition"], "군체 영화 미시청 고객")
+
+    def test_contextual_target_capa_and_reward_context_are_normalized(self) -> None:
+        self.assertEqual(extract_fields("40만명")["target_capa"], 400_000)
+        extracted = extract_fields(
+            "타겟 고객 대상 팝업으로 영화 할인 쿠폰 증정하려고"
+        )
+        self.assertEqual(extracted["benefit"], "영화 할인 쿠폰 증정")
+        self.assertEqual(extracted["target_condition"], "타겟 고객")
+        self.assertEqual(extracted["exposure_method"], "팝업")
+        self.assertIn("증정하려고", extracted["reward_scheme"]["raw_text"])
     def test_complete_schedule_moves_to_benefit_question(self) -> None:
         question = next_question(
             {

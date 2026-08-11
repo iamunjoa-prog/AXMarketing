@@ -26,7 +26,7 @@ def next_question(campaign: dict[str, Any]) -> str:
             "편하게 말씀해 주세요. 미정이면 ‘리워드 미정’이라고 말씀해 주세요."
         )
     if campaign.get("audience_type") == "TARGET" and not campaign.get("target_capa"):
-        return "목표 Capa는 몇 명인가요?"
+        return "목표 발송 인원은 몇 명인가요? 알려주시면 해당 기간의 일자별 슬롯을 바로 확인할게요."
     if not campaign.get("exposure_areas"):
         return "다음으로 전시 영역과 추천 배너를 제안해드릴까요?"
     if not campaign.get("event_name") or not campaign.get("copy"):

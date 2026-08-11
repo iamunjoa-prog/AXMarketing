@@ -8,7 +8,7 @@ from datetime import date
 
 import streamlit as st
 
-from marketing_mvp.capa_service import MockCapaService
+from marketing_mvp.capa_service import (DEFAULT_CAPA_SHEET_CSV_URL, GoogleSheetCapaService)
 from marketing_mvp import copy_service as copy_service_module
 from marketing_mvp import extractor as extractor_module
 from marketing_mvp import integration_contract as contract_module
@@ -167,7 +167,60 @@ st.markdown(
 )
 
 repo = CampaignRepository()
-capa_service = MockCapaService()
+capa_service = GoogleSheetCapaService(
+    os.getenv("CAPA_SHEET_CSV_URL", DEFAULT_CAPA_SHEET_CSV_URL)
+)
+
+
+def campaign_capacity_type(campaign: dict) -> str:
+    reward_type = (campaign.get("reward_scheme") or {}).get("reward_type")
+    exposure_method = campaign.get("exposure_method")
+    needs_banner = exposure_method in {"팝업", "배너"}
+    needs_coupon = reward_type == "COUPON"
+    if needs_banner and needs_coupon:
+        return "both"
+    return "coupon" if needs_coupon else "banner"
+
+
+def check_campaign_capa(campaign: dict) -> tuple[dict | None, str]:
+    try:
+        result = capa_service.check(
+            campaign["start_date"],
+            campaign["end_date"],
+            int(campaign["target_capa"]),
+            campaign_capacity_type(campaign),
+        )
+    except Exception as exc:
+        campaign["capa_checked"] = False
+        campaign["available_capa"] = None
+        st.session_state.capa_result = None
+        return None, f"실시간 Capa 조회에 실패했어요: {exc}"
+
+    campaign["available_capa"] = result["available_capa"]
+    campaign["capa_checked"] = True
+    st.session_state.capa_result = result
+    capacity_type = result.get("capacity_type")
+    if capacity_type == "both":
+        banner = result["minimum_banner_available"]
+        coupon = result["minimum_coupon_available"]
+        banner_status = "가능" if banner >= int(campaign["target_capa"]) else "부족"
+        coupon_status = "가능" if coupon >= int(campaign["target_capa"]) else "부족"
+        message = (
+            f"Google Sheet 최신 데이터에서 {campaign['start_date']}~{campaign['end_date']} "
+            f"일자별 슬롯을 확인했어요. 최저 배너 잔여 **{banner:,}**({banner_status}), "
+            f"최저 쿠폰 잔여 **{coupon:,}**({coupon_status})입니다."
+        )
+    else:
+        label = result.get("capacity_label", "잔여 슬롯")
+        status = "진행 가능" if result["is_possible"] else f"{result['shortfall']:,} 부족"
+        message = (
+            f"Google Sheet 최신 데이터에서 {campaign['start_date']}~{campaign['end_date']} "
+            f"일자별 슬롯을 확인했어요. 최저 {label}는 "
+            f"**{result['available_capa']:,}**으로 **{status}**입니다."
+        )
+    if result.get("covered_days") != result.get("expected_days"):
+        message += " 일부 일자의 데이터가 없어 운영 담당자 확인이 필요해요."
+    return result, message
 
 if "campaign" not in st.session_state:
     campaign = empty_campaign()
@@ -539,6 +592,7 @@ with chat_col:
                 "benefit_pending": "혜택 미정 상태",
                 "reward_scheme": "혜택 구조",
                 "schedule_note": "일정 메모",
+                "target_condition": "타겟 조건", "exposure_method": "노출 방식",
             }
             changed_keys = [
                 key for key, value in extracted.items()
@@ -610,6 +664,20 @@ with chat_col:
                         "말씀하신 내용은 현재 기획안에 이미 반영되어 있어요. "
                         f"{next_question(st.session_state.campaign)}"
                     )
+
+            campaign = st.session_state.campaign
+            if (
+                set(actual_changed_keys)
+                & {
+                    "target_capa", "start_date", "end_date",
+                    "benefit", "reward_scheme", "exposure_method",
+                }
+                and campaign.get("audience_type") == "TARGET"
+                and campaign.get("start_date")
+                and campaign.get("end_date")
+            ):
+                _, capa_message = check_campaign_capa(campaign)
+                reply += f"\n\n{capa_message}"
         elif benefit_recommendation_requested:
             reply = benefit_recommendation(st.session_state.campaign)
 
@@ -1003,12 +1071,7 @@ with state_col:
             and c.get("end_date")
             and c.get("target_capa")
         ):
-            result = capa_service.check(
-                c["start_date"], c["end_date"], c["target_capa"]
-            )
-            c["available_capa"] = result["available_capa"]
-            c["capa_checked"] = True
-            st.session_state.capa_result = result
+            check_campaign_capa(c)
         recommendation = recommend_home_display(c)
         st.session_state.pending_display_recommendation = recommendation
         st.session_state.messages.append(
