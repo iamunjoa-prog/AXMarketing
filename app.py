@@ -65,6 +65,8 @@ is_copy_revision_request = workflow_module.is_copy_revision_request
 is_display_plan_request = workflow_module.is_display_plan_request
 is_contextual_display_plan_request = workflow_module.is_contextual_display_plan_request
 is_period_recommendation_request = workflow_module.is_period_recommendation_request
+is_capa_schedule_recommendation_request = workflow_module.is_capa_schedule_recommendation_request
+extract_capa_search_month = workflow_module.extract_capa_search_month
 period_recommendation = workflow_module.period_recommendation
 is_affirmative_response = workflow_module.is_affirmative_response
 is_campaign_reset_request = workflow_module.is_campaign_reset_request
@@ -181,6 +183,54 @@ def campaign_capacity_type(campaign: dict) -> str:
         return "both"
     return "coupon" if needs_coupon else "banner"
 
+
+def campaign_search_capacity_type(campaign: dict) -> str:
+    reward_type = (campaign.get("reward_scheme") or {}).get("reward_type")
+    if not campaign.get("exposure_method") and not reward_type:
+        return "all"
+    return campaign_capacity_type(campaign)
+
+
+def format_monthly_capa_search(campaign: dict, year: int, month: int) -> str:
+    target_capa = int(campaign["target_capa"])
+    capacity_type = campaign_search_capacity_type(campaign)
+    try:
+        result = capa_service.find_available_dates(
+            year,
+            month,
+            target_capa,
+            capacity_type,
+        )
+    except Exception as exc:
+        return f"실시간 Capa 일정 조회에 실패했어요: {exc}"
+
+    def date_list(items: list[dict]) -> str:
+        if not items:
+            return "가능 일자 없음"
+        return ", ".join(
+            f"{item['date'][5:].replace('-', '/')} "
+            f"(잔여 {item['available_capa']:,})"
+            for item in items
+        )
+
+    heading = f"Google Sheet 최신 데이터에서 {year}년 {month}월, 목표 {target_capa:,} 기준으로 조회했어요."
+    if capacity_type == "all":
+        return (
+            f"{heading}\n\n"
+            f"- 배너 슬롯: {date_list(result['banner_dates'])}\n"
+            f"- 쿠폰 슬롯: {date_list(result['coupon_dates'])}\n\n"
+            "배너와 쿠폰 중 사용할 슬롯을 알려주시면 해당 일자로 기획안에 반영할게요."
+        )
+    label = {
+        "banner": "배너",
+        "coupon": "쿠폰",
+        "both": "배너·쿠폰 동시",
+    }.get(capacity_type, "해당")
+    return (
+        f"{heading}\n\n"
+        f"**{label} 슬롯 가능 일자**: {date_list(result['dates'])}\n\n"
+        "원하는 일자를 말씀해 주시면 기획안에 반영할게요."
+    )
 
 def check_campaign_capa(campaign: dict) -> tuple[dict | None, str]:
     try:
@@ -504,6 +554,9 @@ with chat_col:
         benefit_recommendation_requested = is_benefit_recommendation_request(prompt)
         benefit_presence_only = is_benefit_presence_response(prompt)
         affirmative_requested = is_affirmative_response(prompt)
+        capa_schedule_recommendation_requested = (
+            is_capa_schedule_recommendation_request(prompt, previous_assistant)
+        )
         period_recommendation_requested = is_period_recommendation_request(
             prompt,
             previous_assistant,
@@ -565,6 +618,25 @@ with chat_col:
                 "좋아요. 어떤 혜택인가요? 할인, 쿠폰, 포인트백, 추첨 경품 중 "
                 "편하게 말씀해 주세요."
             )
+        elif capa_schedule_recommendation_requested:
+            campaign = st.session_state.campaign
+            if extracted:
+                invalidate_confirmation()
+                campaign.update(extracted)
+            if campaign.get("audience_type") != "TARGET":
+                reply = "가능 일자 조회는 TARGET 캠페인에서 사용할 수 있어요. 진행 방식을 TARGET으로 설정할까요?"
+            elif not campaign.get("target_capa"):
+                reply = "조회할 목표 인원을 알려주세요. 예: 40만 명"
+            else:
+                search_month = extract_capa_search_month(prompt)
+                if not search_month:
+                    reply = "어느 월의 가능한 일자를 조회할까요? 예: 8월 중 가능한 일정 찾아줘"
+                else:
+                    reply = format_monthly_capa_search(
+                        campaign,
+                        search_month[0],
+                        search_month[1],
+                    )
         elif period_recommendation_requested:
             reply = period_recommendation(st.session_state.campaign)
         elif copy_revision_requested:

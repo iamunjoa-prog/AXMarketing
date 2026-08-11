@@ -58,6 +58,69 @@ class GoogleSheetCapaService:
             payload = response.read().decode("utf-8-sig")
         return list(csv.DictReader(io.StringIO(payload)))
 
+    def find_available_dates(
+        self,
+        year: int,
+        month: int,
+        target_capa: int,
+        capacity_type: str = "all",
+        limit: int = 7,
+    ) -> dict[str, Any]:
+        daily = [
+            {
+                "date": _parse_sheet_date(row["날짜"]),
+                "banner_available": int(row["배너 잔여 슬롯"].replace(",", "") or 0),
+                "coupon_available": int(row["쿠폰 잔여 슬롯"].replace(",", "") or 0),
+            }
+            for row in self._rows()
+        ]
+        monthly = [
+            row for row in daily
+            if row["date"].year == year and row["date"].month == month
+        ]
+        if not monthly:
+            raise ValueError("선택한 월의 Capa 데이터가 Google Sheet에 없습니다.")
+
+        def candidates(key: str) -> list[dict[str, Any]]:
+            return [
+                {
+                    "date": row["date"].isoformat(),
+                    "available_capa": row[key],
+                }
+                for row in monthly
+                if row[key] >= target_capa
+            ][:limit]
+
+        banner_dates = candidates("banner_available")
+        coupon_dates = candidates("coupon_available")
+        if capacity_type == "banner":
+            selected = banner_dates
+        elif capacity_type == "coupon":
+            selected = coupon_dates
+        elif capacity_type == "both":
+            selected = [
+                {
+                    "date": row["date"].isoformat(),
+                    "available_capa": min(
+                        row["banner_available"], row["coupon_available"]
+                    ),
+                }
+                for row in monthly
+                if row["banner_available"] >= target_capa
+                and row["coupon_available"] >= target_capa
+            ][:limit]
+        else:
+            selected = []
+        return {
+            "year": year,
+            "month": month,
+            "target_capa": target_capa,
+            "capacity_type": capacity_type,
+            "dates": selected,
+            "banner_dates": banner_dates,
+            "coupon_dates": coupon_dates,
+            "source": "google_sheet_live",
+        }
     def check(
         self,
         start_date: str,

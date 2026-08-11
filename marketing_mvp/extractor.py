@@ -314,6 +314,15 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         channel = campaign_channel.group(0).upper()
         result["exposure_method"] = "문자" if channel == "SMS" else channel
 
+    target_condition_match = re.search(
+        r"^\s*(.+?)\s+대상\s+(?:TARGET|타겟)\s*$",
+        text,
+        re.IGNORECASE,
+    )
+    if target_condition_match:
+        result["audience_type"] = "TARGET"
+        result["target_condition"] = target_condition_match.group(1).strip()
+
     compact_text = re.sub(r"\s+", "", text).lower()
     known_ppm_product = next(
         (
@@ -496,7 +505,7 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         r"^\s*영화\s+([^,，]+?)(?:\s*[,，]|$)",
         r"^\s*([^,，]+?)\s+영화\s*(?:[,，]|$)",
     ]
-    if not result.get("product_name"):
+    if not result.get("product_name") and not target_condition_match:
         for pattern in movie_title_patterns:
             movie_title = re.search(pattern, text, re.IGNORECASE)
             if movie_title:

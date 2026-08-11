@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 from marketing_mvp.integration_contract import ACTION, make_mermaid
@@ -133,6 +134,42 @@ def benefit_recommendation(campaign: dict[str, Any]) -> str:
         "두 안의 비용 구조를 비교할 수 있습니다. 결정 전까지는 ‘리워드 미정’으로 저장할 수 있어요."
     )
 
+
+def is_capa_schedule_recommendation_request(
+    text: str,
+    previous_assistant: str = "",
+) -> bool:
+    normalized = text.lower().replace(" ", "")
+    has_capacity = (
+        any(word in normalized for word in ("capa", "모수", "타겟", "target"))
+        or bool(re.search(r"\d+(?:\.\d+)?(?:만|천)(?:명)?", normalized))
+    )
+    has_availability = any(
+        word in normalized for word in ("가능", "빈일정", "빈날짜", "잔여", "슬롯")
+    )
+    has_schedule_action = (
+        any(word in normalized for word in ("일정", "날짜", "일자", "기간"))
+        and any(word in normalized for word in ("조회", "추천", "찾아", "알려"))
+    )
+    direct_request = has_capacity and has_availability and has_schedule_action
+    previous_normalized = previous_assistant.lower().replace(" ", "")
+    contextual_month = (
+        bool(re.search(r"\d{1,2}월", text))
+        and "어느월" in previous_normalized
+        and "가능한일자" in previous_normalized
+    )
+    return direct_request or contextual_month
+
+
+def extract_capa_search_month(
+    text: str,
+    today: date | None = None,
+) -> tuple[int, int] | None:
+    today = today or date.today()
+    match = re.search(r"(?:(\d{4})년?\s*)?(\d{1,2})월", text)
+    if not match:
+        return None
+    return int(match.group(1) or today.year), int(match.group(2))
 
 def is_period_recommendation_request(
     text: str,

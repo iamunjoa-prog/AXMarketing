@@ -18,6 +18,8 @@ from marketing_mvp.workflow import (
     is_contextual_display_plan_request,
     is_display_plan_request,
     is_period_recommendation_request,
+    is_capa_schedule_recommendation_request,
+    extract_capa_search_month,
     next_question,
     period_recommendation,
 )
@@ -72,6 +74,29 @@ class PlanningFlowTests(unittest.TestCase):
                 self.assertEqual(known["product_name"], product)
                 self.assertEqual(known["product_type"], "PPM")
 
+    def test_capa_schedule_search_is_not_generic_period_recommendation(self) -> None:
+        first = "응 타겟 40만 가능한 일정 조회"
+        self.assertTrue(is_capa_schedule_recommendation_request(first))
+        second = "40만 가능한 8월 중 일정 추천해줄래?"
+        self.assertTrue(is_capa_schedule_recommendation_request(second))
+        self.assertTrue(
+            is_capa_schedule_recommendation_request(
+                "8월", "어느 월의 가능한 일자를 조회할까요?"
+            )
+        )
+        self.assertEqual(
+            extract_capa_search_month(
+                second,
+                __import__("datetime").date(2026, 8, 11),
+            ),
+            (2026, 8),
+        )
+
+    def test_target_condition_does_not_overwrite_product_name(self) -> None:
+        extracted = extract_fields("영화 미구매자 대상 target")
+        self.assertEqual(extracted["audience_type"], "TARGET")
+        self.assertEqual(extracted["target_condition"], "영화 미구매자")
+        self.assertNotIn("product_name", extracted)
     def test_period_recommendation_offer_and_acceptance(self) -> None:
         question = next_question(
             {

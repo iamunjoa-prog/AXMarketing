@@ -57,6 +57,12 @@ class CapaServiceTests(unittest.TestCase):
             [item["start_date"] for item in result["alternatives"]],
             ["2026-08-03", "2026-08-06"],
         )
+    def test_monthly_search_separates_banner_and_coupon_dates(self) -> None:
+        result = StubGoogleSheetCapaService().find_available_dates(
+            2026, 8, 400_000, "all"
+        )
+        self.assertEqual(result["banner_dates"], [])
+        self.assertEqual(result["coupon_dates"][0]["date"], "2026-08-21")
     def test_coupon_only_campaign_uses_coupon_slot(self) -> None:
         result = StubGoogleSheetCapaService().check(
             "2026-08-21", "2026-08-22", 400_000, "coupon"
