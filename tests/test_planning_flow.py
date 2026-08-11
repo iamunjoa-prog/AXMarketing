@@ -192,6 +192,16 @@ class PlanningFlowTests(unittest.TestCase):
         self.assertEqual(extracted["target_condition"], "타겟 고객")
         self.assertEqual(extracted["exposure_method"], "팝업")
         self.assertIn("증정하려고", extracted["reward_scheme"]["raw_text"])
+    def test_single_date_target_banner_request_is_extracted(self) -> None:
+        extracted = extract_fields(
+            "8/4 40\ub9cc \ubc30\ub108 \ud0c0\uac9f \ucea0\ud398\uc778 \uc0dd\uac01\ud574",
+            today=__import__("datetime").date(2026, 8, 11),
+        )
+        self.assertEqual(extracted["start_date"], "2026-08-04")
+        self.assertEqual(extracted["end_date"], "2026-08-04")
+        self.assertEqual(extracted["target_capa"], 400_000)
+        self.assertEqual(extracted["audience_type"], "TARGET")
+        self.assertEqual(extracted["exposure_method"], "\ubc30\ub108")
     def test_complete_schedule_moves_to_benefit_question(self) -> None:
         question = next_question(
             {

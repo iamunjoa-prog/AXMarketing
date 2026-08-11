@@ -220,6 +220,16 @@ def check_campaign_capa(campaign: dict) -> tuple[dict | None, str]:
         )
     if result.get("covered_days") != result.get("expected_days"):
         message += " 일부 일자의 데이터가 없어 운영 담당자 확인이 필요해요."
+    if not result["is_possible"]:
+        if result.get("alternatives"):
+            options = ", ".join(
+                f"{item['start_date'][5:].replace('-', '/')} "
+                f"(잔여 {item['available_capa']:,})"
+                for item in result["alternatives"]
+            )
+            message += f" 전후 3일 중 가능한 대체 일자는 **{options}**입니다."
+        else:
+            message += " 전후 3일에도 목표 인원을 충족하는 같은 종류의 슬롯이 없습니다."
     return result, message
 
 if "campaign" not in st.session_state:
@@ -677,7 +687,7 @@ with chat_col:
                 and campaign.get("end_date")
             ):
                 _, capa_message = check_campaign_capa(campaign)
-                reply += f"\n\n{capa_message}"
+                reply = f"{capa_message}\n\n{reply}"
         elif benefit_recommendation_requested:
             reply = benefit_recommendation(st.session_state.campaign)
 
@@ -1303,16 +1313,26 @@ else:
         st.link_button("B tv 어드민 이동", ADMIN_BASE_URL, width="stretch")
 if st.session_state.capa_result:
     result = st.session_state.capa_result
-    if result["is_possible"]:
-        st.success(f"현재 일정에서 목표 Capa를 충족합니다. 가능 Capa: {result['available_capa']:,}명")
+    if result.get("capacity_type") == "both":
+        st.info(
+            f"기간 내 최저 배너 잔여 슬롯: {result['minimum_banner_available']:,} · "
+            f"최저 쿠폰 잔여 슬롯: {result['minimum_coupon_available']:,}"
+        )
+    elif result["is_possible"]:
+        st.success(
+            f"현재 일정에서 목표 인원을 충족합니다. "
+            f"최저 {result.get('capacity_label', '잔여 슬롯')}: "
+            f"{result['available_capa']:,}"
+        )
     else:
         st.warning(
-            f"현재 일정은 {result['shortfall']:,}명이 부족합니다. "
-            f"가능 Capa: {result['available_capa']:,}명"
+            f"현재 일정은 목표 대비 {result['shortfall']:,}이 부족합니다. "
+            f"최저 {result.get('capacity_label', '잔여 슬롯')}: "
+            f"{result['available_capa']:,}"
         )
-        if result["alternatives"]:
-            st.write("대안 일정")
-            st.dataframe(result["alternatives"], width="stretch", hide_index=True)
+    if not result["is_possible"] and result.get("alternatives"):
+        st.write("전후 3일 대체 가능 일자")
+        st.dataframe(result["alternatives"], width="stretch", hide_index=True)
 
 if st.session_state.admin_payload:
     st.json(st.session_state.admin_payload)

@@ -32,6 +32,31 @@ class CapaServiceTests(unittest.TestCase):
         self.assertEqual(result["covered_days"], 2)
         self.assertEqual(result["expected_days"], 2)
 
+    def test_unavailable_day_suggests_available_dates_within_three_days(self) -> None:
+        service = StubGoogleSheetCapaService()
+        service._rows = lambda: [
+            {
+                "\ub0a0\uc9dc": "2026. 8. 3",
+                "\ubc30\ub108 \uc794\uc5ec \uc2ac\ub86f": "500000",
+                "\ucfe0\ud3f0 \uc794\uc5ec \uc2ac\ub86f": "0",
+            },
+            {
+                "\ub0a0\uc9dc": "2026. 8. 4",
+                "\ubc30\ub108 \uc794\uc5ec \uc2ac\ub86f": "0",
+                "\ucfe0\ud3f0 \uc794\uc5ec \uc2ac\ub86f": "0",
+            },
+            {
+                "\ub0a0\uc9dc": "2026. 8. 6",
+                "\ubc30\ub108 \uc794\uc5ec \uc2ac\ub86f": "700000",
+                "\ucfe0\ud3f0 \uc794\uc5ec \uc2ac\ub86f": "0",
+            },
+        ]
+        result = service.check("2026-08-04", "2026-08-04", 400_000, "banner")
+        self.assertFalse(result["is_possible"])
+        self.assertEqual(
+            [item["start_date"] for item in result["alternatives"]],
+            ["2026-08-03", "2026-08-06"],
+        )
     def test_coupon_only_campaign_uses_coupon_slot(self) -> None:
         result = StubGoogleSheetCapaService().check(
             "2026-08-21", "2026-08-22", 400_000, "coupon"

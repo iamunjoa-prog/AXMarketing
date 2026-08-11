@@ -304,6 +304,15 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
     audience = re.search(r"(?<![A-Za-z])(MASS|TARGET)(?![A-Za-z])", text, re.IGNORECASE)
     if audience:
         result["audience_type"] = audience.group(1).upper()
+    elif "타겟" in text:
+        result["audience_type"] = "TARGET"
+    elif "매스" in text:
+        result["audience_type"] = "MASS"
+
+    campaign_channel = re.search(r"팝업|배너|문자|SMS|푸시|알림톡", text, re.IGNORECASE)
+    if campaign_channel and re.search(r"타겟|TARGET|캠페인|프로모션", text, re.IGNORECASE):
+        channel = campaign_channel.group(0).upper()
+        result["exposure_method"] = "문자" if channel == "SMS" else channel
 
     compact_text = re.sub(r"\s+", "", text).lower()
     known_ppm_product = next(
@@ -383,8 +392,14 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         bare_capa = re.fullmatch(
             r"\s*([\d,.]+\s*(?:만|천)?)\s*명\s*", text, re.IGNORECASE
         )
-        if bare_capa:
-            result["target_capa"] = _number(bare_capa.group(1))
+        contextual_capa = None
+        if re.search(r"타겟|TARGET|배너|쿠폰|캠페인", text, re.IGNORECASE):
+            contextual_capa = re.search(
+                r"(?<![\d/])([\d,.]+\s*(?:만|천))\s*(?:명)?", text
+            )
+        capa_value = bare_capa or contextual_capa
+        if capa_value:
+            result["target_capa"] = _number(capa_value.group(1))
 
     benefit_patterns = [
         r"((?:구매|참여|응모)(?:하면|할\s*때|한\s*고객|고객)?[^,.。\n]{0,40}?"
@@ -450,6 +465,25 @@ def extract_fields(text: str, today: date | None = None) -> dict[str, Any]:
         result["schedule_pending"] = False
     elif has_schedule_flexibility:
         result["schedule_note"] = text.strip().rstrip(".。")
+    else:
+        single_date = re.search(
+            r"(?<!\d)(?:(\d{4})[./-])?(\d{1,2})[./-](\d{1,2})(?!\d)",
+            text,
+        )
+        has_target_context = re.search(
+            r"타겟|TARGET|배너|쿠폰|캠페인|Capa|모수",
+            text,
+            re.IGNORECASE,
+        )
+        if single_date and has_target_context:
+            year = int(single_date.group(1) or today.year)
+            month = int(single_date.group(2))
+            day = int(single_date.group(3))
+            selected_date = _iso(year, month, day)
+            if selected_date:
+                result["start_date"] = selected_date
+                result["end_date"] = selected_date
+                result["schedule_pending"] = False
 
     normalized_product_name = normalize_product_name(text)
     if normalized_product_name != text.strip():

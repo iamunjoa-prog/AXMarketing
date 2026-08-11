@@ -4,7 +4,7 @@ import csv
 import io
 import json
 import ssl
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.request import Request, urlopen
@@ -67,18 +67,22 @@ class GoogleSheetCapaService:
     ) -> dict[str, Any]:
         start = date.fromisoformat(start_date)
         end = date.fromisoformat(end_date)
-        matching = [
-            row for row in self._rows()
-            if start <= _parse_sheet_date(row["날짜"]) <= end
+        all_daily = [
+            {
+                "date": _parse_sheet_date(row["날짜"]),
+                "banner_available": int(row["배너 잔여 슬롯"].replace(",", "") or 0),
+                "coupon_available": int(row["쿠폰 잔여 슬롯"].replace(",", "") or 0),
+            }
+            for row in self._rows()
         ]
+        matching = [row for row in all_daily if start <= row["date"] <= end]
         if not matching:
             raise ValueError("선택한 기간의 Capa 데이터가 Google Sheet에 없습니다.")
 
         daily = [
             {
-                "date": _parse_sheet_date(row["날짜"]).isoformat(),
-                "banner_available": int(row["배너 잔여 슬롯"].replace(",", "") or 0),
-                "coupon_available": int(row["쿠폰 잔여 슬롯"].replace(",", "") or 0),
+                **row,
+                "date": row["date"].isoformat(),
             }
             for row in matching
         ]
@@ -94,11 +98,42 @@ class GoogleSheetCapaService:
         else:
             available = minimum_banner
             capacity_label = "배너 잔여 슬롯"
+        is_possible = available >= target_capa and len(daily) == expected_days
+
+        def row_available(row: dict[str, Any]) -> int:
+            if capacity_type == "both":
+                return min(row["banner_available"], row["coupon_available"])
+            if capacity_type == "coupon":
+                return row["coupon_available"]
+            return row["banner_available"]
+
+        alternatives = []
+        if not is_possible:
+            alternative_start = start - timedelta(days=3)
+            alternative_end = end + timedelta(days=3)
+            candidates = [
+                row for row in all_daily
+                if alternative_start <= row["date"] <= alternative_end
+                and not (start <= row["date"] <= end)
+                and row_available(row) >= target_capa
+            ]
+            candidates.sort(key=lambda row: (abs((row["date"] - start).days), row["date"]))
+            alternatives = [
+                {
+                    "start_date": row["date"].isoformat(),
+                    "end_date": row["date"].isoformat(),
+                    "available_capa": row_available(row),
+                    "banner_available": row["banner_available"],
+                    "coupon_available": row["coupon_available"],
+                }
+                for row in candidates[:3]
+            ]
+
         return {
             "available_capa": available,
-            "is_possible": available >= target_capa and len(daily) == expected_days,
+            "is_possible": is_possible,
             "shortfall": max(target_capa - available, 0),
-            "alternatives": [],
+            "alternatives": alternatives,
             "source": "google_sheet_live",
             "capacity_type": capacity_type,
             "capacity_label": capacity_label,
